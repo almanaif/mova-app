@@ -16,7 +16,7 @@
 
 <!-- ===== LOADING ===== -->
 <div id="loading">
-  <div class="ld-ic">🛵</div>
+  <div class="ld-ic"><span data-icon="bike" data-size="48"></span></div>
   <div class="ld-name">MO<span>VA</span></div>
   <div class="ld-bar"><div class="ld-fill"></div></div>
   <div class="ld-sub" id="ld-sub">جاري التحميل...</div>
@@ -52,7 +52,7 @@
 <!-- ===== ENTRY SCREEN ===== -->
 <div id="screen-entry" class="screen active">
   <div class="auth-logo" style="margin-bottom:36px">
-    <div class="auth-logo-ic">🛵</div>
+    <div class="auth-logo-ic"><span data-icon="bike" data-size="40"></span></div>
     <h1>MO<span>VA</span></h1>
     <p>توصيل سريع في المنايف</p>
   </div>
@@ -61,22 +61,58 @@
     <p>هنوصلك لأفضل متجر ومناديب التوصيل</p>
     <div class="role-grid">
       <div class="role-btn" onclick="showScreen('screen-auth');pickEntryType('customer')">
-        <span class="ri">👤</span><strong>عميل</strong><small>اطلب من المتاجر</small>
+        <span class="ri" data-icon="user" data-size="22"></span><strong>عميل</strong><small>اطلب من المتاجر</small>
       </div>
       <div class="role-btn" onclick="showScreen('screen-auth');pickEntryType('driver')">
-        <span class="ri">🛵</span><strong>مندوب</strong><small>وصل الطلبات</small>
+        <span class="ri" data-icon="bike" data-size="22"></span><strong>مندوب</strong><small>وصل الطلبات</small>
       </div>
       <div class="role-btn" onclick="showScreen('screen-auth');pickEntryType('merchant')">
-        <span class="ri">🏪</span><strong>تاجر</strong><small>بيع منتجاتك</small>
+        <span class="ri" data-icon="store" data-size="22"></span><strong>تاجر</strong><small>بيع منتجاتك</small>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ===== AUTHENTICATION V2 — ROLE SELECT SCREEN (بعد Authentication دائمًا، لكل Provider) ===== -->
+<div id="screen-role-select" class="screen">
+  <div class="auth-logo" style="margin-bottom:36px">
+    <div class="auth-logo-ic"><span data-icon="bike" data-size="40"></span></div>
+    <h1>MO<span>VA</span></h1>
+    <p>حساب جديد — اختر نوع حسابك للمتابعة</p>
+  </div>
+  <div class="role-card">
+    <h2>اختر دورك</h2>
+    <p>هنوصلك لأفضل متجر ومناديب التوصيل</p>
+    <div class="role-grid">
+      <div class="role-btn" onclick="completeRegistration('customer')">
+        <span class="ri" data-icon="user" data-size="22"></span><strong>عميل</strong><small>اطلب من المتاجر</small>
+      </div>
+      <div class="role-btn" onclick="completeRegistration('driver')">
+        <span class="ri" data-icon="bike" data-size="22"></span><strong>مندوب</strong><small>وصل الطلبات</small>
+      </div>
+      <div class="role-btn" onclick="completeRegistration('merchant')">
+        <span class="ri" data-icon="store" data-size="22"></span><strong>تاجر</strong><small>بيع منتجاتك</small>
+      </div>
+    </div>
+    <p style="text-align:center;margin-top:18px;font-size:13px"><a href="javascript:void(0)" onclick="doLogout()" style="color:rgba(255,255,255,.6);text-decoration:underline">مش أنا؟ تسجيل خروج وتغيير الحساب</a></p>
+  </div>
+</div>
+
+<!-- ===== AUTHENTICATION V2 — COMPLETE MERCHANT PROFILE (Resume Registration) ===== -->
+<div id="screen-complete-merchant" class="screen">
+  <div class="jm-hdr"><h1>بيانات متجرك</h1><p>كمّل بيانات متجرك عشان تقدر تستقبل الطلبات على MOVA</p></div>
+  <div class="jm-body">
+    <div class="jm-sec"><h3>بيانات المتجر</h3><div class="inp-g"><label>اسم المتجر</label><input type="text" id="cm-store-name" class="inp" placeholder="سوبرماركت المنايف"></div><div class="inp-g"><label>رقم تليفون المتجر</label><input type="tel" id="cm-store-phone" class="inp" placeholder="01xxxxxxxxx"></div></div>
+    <div class="jm-sec"><h3>تصنيف المتجر</h3><div class="cat-grid"><div class="cat-g-btn cat-g-btn2" onclick="selCMCat(this)"><span class="ic">🛒</span>بقالة</div><div class="cat-g-btn cat-g-btn2" onclick="selCMCat(this)"><span class="ic">🍽️</span>مطعم</div><div class="cat-g-btn cat-g-btn2" onclick="selCMCat(this)"><span class="ic">💊</span>صيدلية</div></div></div>
+    <button class="btn-ac" id="cm-submit-btn" onclick="submitMerchantProfile()">حفظ ومتابعة</button>
+    <p style="text-align:center;margin-top:14px;font-size:13px"><a href="javascript:void(0)" onclick="doLogout()" style="color:var(--mu);text-decoration:underline">تسجيل خروج</a></p>
   </div>
 </div>
 
 <!-- ===== AUTH SCREEN ===== -->
 <div id="screen-auth" class="screen">
   <div class="auth-logo">
-    <div class="auth-logo-ic" id="entry-type-icon">🛵</div>
+    <div class="auth-logo-ic" id="entry-type-icon"><span data-icon="bike" data-size="40"></span></div>
     <h1>MO<span>VA</span></h1>
     <p id="entry-type-label">حساب جديد</p>
   </div>
@@ -146,7 +182,7 @@
 <!-- جديد (Sprint 3 - القرار 1، حظر فعلي): شاشة بتظهر بس للعميل اللي status=='blocked' -->
 <div id="screen-blocked" class="screen">
   <div style="padding:40px 20px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:12px;min-height:100vh;justify-content:center">
-    <div style="font-size:48px">🚫</div>
+    <div style="display:flex;justify-content:center;color:var(--color-danger)"><span data-icon="alert-circle" data-size="48"></span></div>
     <h2 style="margin:0">حسابك موقوف مؤقتًا</h2>
     <p style="color:var(--mu);font-size:13px;max-width:280px">تم إيقاف حسابك من الإدارة. لو تعتقد إن ده حصل بالغلط، تواصل معانا.</p>
     <button class="btn-p" onclick="doLogout()" style="background:var(--s);margin-top:10px">تسجيل الخروج</button>
@@ -158,8 +194,8 @@
   <div class="app-header">
     <div class="hdr-loc" onclick="getLocation()"><small>📍 الموقع</small><strong>المنايف، أبو صوير - الإسماعيلية</strong></div>
     <div class="hdr-acts">
-      <button class="icon-btn" onclick="openNotifs()">🔔<span class="badge" id="notif-c">0</span></button>
-      <button class="icon-btn" onclick="openCart()">🛒<span class="badge" id="cart-b">0</span></button>
+      <button class="icon-btn" onclick="openNotifs()"><span data-icon="bell" data-size="20"></span><span class="badge" id="notif-c">0</span></button>
+      <button class="icon-btn" onclick="openCart()"><span data-icon="shopping-cart" data-size="20"></span><span class="badge" id="cart-b">0</span></button>
     </div>
   </div>
 
@@ -213,18 +249,18 @@
         <div class="acc-stat"><div class="acc-stat-v" id="pts-prof">0</div><div class="acc-stat-l">⭐ نقاط الولاء</div></div>
       </div>
       <div class="menu-list">
-        <button class="menu-item" onclick="custNav('orders',document.querySelectorAll('#screen-customer .nav-item')[1])"><div class="mi-ic">📦</div><div class="mi-text"><strong>طلباتي</strong><small>تتبع طلباتك</small></div><span class="mi-arr">←</span></button>
-        <button class="menu-item" onclick="custNav('rewards',document.querySelectorAll('#screen-customer .nav-item')[2])"><div class="mi-ic">⭐</div><div class="mi-text"><strong>نقاط الولاء</strong><small><span id="pts-menu">0</span> نقطة</small></div><span class="mi-arr">←</span></button>
-        <button class="menu-item" onclick="doLogout()"><div class="mi-ic" style="background:rgba(239,68,68,.1)">🚪</div><div class="mi-text"><strong>تسجيل الخروج</strong><small>خروج من حسابك</small></div><span class="mi-arr">←</span></button>
+        <button class="menu-item" onclick="custNav('orders',document.querySelectorAll('#screen-customer .nav-item')[1])"><div class="mi-ic"><span data-icon="package" data-size="18"></span></div><div class="mi-text"><strong>طلباتي</strong><small>تتبع طلباتك</small></div><span class="mi-arr" data-icon="chevron-left" data-size="16"></span></button>
+        <button class="menu-item" onclick="custNav('rewards',document.querySelectorAll('#screen-customer .nav-item')[2])"><div class="mi-ic"><span data-icon="star" data-size="18"></span></div><div class="mi-text"><strong>نقاط الولاء</strong><small><span id="pts-menu">0</span> نقطة</small></div><span class="mi-arr" data-icon="chevron-left" data-size="16"></span></button>
+        <button class="menu-item" onclick="doLogout()"><div class="mi-ic" style="background:rgba(239,68,68,.1);color:var(--color-danger)"><span data-icon="log-out" data-size="18"></span></div><div class="mi-text"><strong>تسجيل الخروج</strong><small>خروج من حسابك</small></div><span class="mi-arr" data-icon="chevron-left" data-size="16"></span></button>
       </div>
     </div>
   </div>
 
   <div class="bottom-nav">
-    <button class="nav-item active" onclick="custNav('home',this)"><span class="nav-ic">🏠</span>الرئيسية</button>
-    <button class="nav-item" onclick="custNav('orders',this)"><span class="nav-ic">📦</span>طلباتي</button>
-    <button class="nav-item" onclick="custNav('rewards',this)"><span class="nav-ic">⭐</span>نقاط</button>
-    <button class="nav-item" onclick="custNav('profile',this)"><span class="nav-ic">👤</span>حسابي</button>
+    <button class="nav-item active" onclick="custNav('home',this)"><span class="nav-ic" data-icon="home" data-size="20"></span>الرئيسية</button>
+    <button class="nav-item" onclick="custNav('orders',this)"><span class="nav-ic" data-icon="package" data-size="20"></span>طلباتي</button>
+    <button class="nav-item" onclick="custNav('rewards',this)"><span class="nav-ic" data-icon="star" data-size="20"></span>نقاط</button>
+    <button class="nav-item" onclick="custNav('profile',this)"><span class="nav-ic" data-icon="user" data-size="20"></span>حسابي</button>
   </div>
 </div>
 
@@ -313,6 +349,31 @@
   </div>
   <div style="padding:14px">
     <button class="btn-p" id="rs-retry-btn" onclick="retryDispatch()" style="display:none">إعادة محاولة البحث عن سائق</button>
+  </div>
+</div>
+
+<!-- ===== EXTERNAL PURCHASE STATUS (Phase 3B - "لديك طلب؟ اطلبه") ===== -->
+<div id="screen-ep-status" class="screen">
+  <div class="track-hero" style="display:flex;align-items:center;gap:12px">
+    <button onclick="epCloseStatus();showScreen('screen-customer')" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:34px;height:34px;border-radius:50%;font-size:16px;cursor:pointer;flex-shrink:0">→</button>
+    <div><h2>حالة طلب الشراء</h2><p id="ep-status-label">جاري البحث عن كابتن...</p></div>
+  </div>
+  <div class="map-card">
+    <div class="map-info-row"><span class="lbl">المكان</span><span class="val" id="ep-place-val">--</span></div>
+    <div class="map-info-row"><span class="lbl">الطلب</span><span class="val" id="ep-items-val">--</span></div>
+    <div class="map-info-row"><span class="lbl">ميزانية تقريبية</span><span class="val" id="ep-budget-val">--</span></div>
+    <div class="map-info-row"><span class="lbl">السعر الفعلي</span><span class="val" id="ep-price-val">--</span></div>
+  </div>
+  <div class="map-card" id="ep-decision-box" style="display:none;border:2px solid var(--p)">
+    <p id="ep-decision-msg" style="font-size:13px;margin-bottom:12px"></p>
+    <div style="display:flex;gap:8px">
+      <button class="btn-p" style="flex:1" onclick="epCustomerContinue(window.currentEpStatusId)">أكمل الطلب</button>
+      <button class="btn-outline" style="flex:1" onclick="epCustomerCancel(window.currentEpStatusId)">إلغاء الطلب</button>
+    </div>
+  </div>
+  <div style="padding:14px">
+    <button class="btn-p" id="ep-retry-btn" onclick="retryExternalDispatch()" style="display:none">إعادة محاولة البحث عن كابتن</button>
+    <button class="btn-outline" id="ep-early-cancel-btn" onclick="epCustomerCancel(window.currentEpStatusId)" style="width:100%;margin-top:8px;display:none">إلغاء الطلب</button>
   </div>
 </div>
 
@@ -414,7 +475,7 @@
 </div>
 
 <!-- ===== IMAGE ZOOM ===== -->
-<div class="zoom-ov" id="zoom-ov"><button class="zc" onclick="closeZoom()">✕</button><img id="zoom-img" src=""></div>
+<div class="zoom-ov" id="zoom-ov"><button class="zc" onclick="closeZoom()"><span data-icon="x" data-size="18"></span></button><img id="zoom-img" src=""></div>
 
 
 
@@ -427,7 +488,7 @@
         <div style="min-width:0"><h2 id="drv-name">أهلاً 👋</h2><div class="drv-hdr-meta"><p style="margin:0">ابدأ يومك</p><span class="drv-hdr-rating">⭐ <span id="drv-hdr-rating-num">5.0</span></span></div></div>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
-        <button class="icon-btn" onclick="openNotifs()" style="color:#fff;background:rgba(255,255,255,.1)">🔔<span class="badge" id="drv-notif-c">0</span></button>
+        <button class="icon-btn" onclick="openNotifs()" style="color:#fff;background:rgba(255,255,255,.1)"><span data-icon="bell" data-size="20"></span><span class="badge" id="drv-notif-c">0</span></button>
         <div class="online-tog" onclick="toggleOnline(this)"><div class="tog-dot on" id="tog-dot"></div><span id="tog-lbl" style="font-size:12px;font-weight:700;color:#fff">متاح</span></div>
       </div>
     </div>
@@ -442,6 +503,7 @@
   <div id="drv-home-tab">
     <div class="notif-banner" id="new-ord-banner" style="display:none"><div class="nb-ic">📦</div><div class="nb-info"><h4>طلب جديد!</h4><p id="new-ord-txt">طلب جديد بانتظارك</p></div><button class="nb-btn" onclick="acceptOrd()">قبول</button></div>
     <div class="notif-banner" id="ride-offer-banner" style="display:none"><div class="nb-ic">🛵</div><div class="nb-info"><h4>عرض مشوار!</h4><p id="ride-offer-txt">مشوار جديد بانتظارك</p></div><div style="display:flex;gap:6px"><button class="nb-btn" onclick="acceptRideOffer()">قبول</button><button class="nb-btn" style="background:var(--s)" onclick="rejectRideOffer()">رفض</button></div></div>
+    <div class="notif-banner" id="ep-offer-banner" style="display:none"><div class="nb-ic">🛍️</div><div class="nb-info"><h4>طلب شراء خارجي!</h4><p id="ep-offer-txt">طلب جديد بانتظارك</p></div><div style="display:flex;gap:6px"><button class="nb-btn" onclick="acceptExternalOffer()">قبول</button><button class="nb-btn" style="background:var(--s)" onclick="rejectExternalOffer()">رفض</button></div></div>
     <!-- ===== Driver Active Ride Panel (Phase 4B) - بانل بسيط، مش Dashboard ===== -->
     <div class="map-card dar-panel" id="dar-panel" style="display:none">
       <h3>🛵 مشوار جارٍ</h3>
@@ -451,6 +513,19 @@
       <div class="map-info-row"><span class="lbl">مدة الرحلة المتوقعة</span><span class="val" id="dar-trip-eta-val">--</span></div>
       <div class="map-info-row" id="dar-pickup-eta-row" style="display:none"><span class="lbl">وقت الوصول للعميل</span><span class="val" id="dar-pickup-eta-val">--</span></div>
       <button class="btn-p" id="dar-action-btn" style="margin-top:10px;width:100%" onclick="handleDriverRideAction()">--</button>
+    </div>
+    <div class="map-card dar-panel" id="ep-active-panel" style="display:none">
+      <h3>🛍️ طلب شراء خارجي جارٍ</h3>
+      <p id="ep-active-status" class="dar-status">--</p>
+      <div class="map-info-row"><span class="lbl">المكان</span><span class="val" id="ep-active-place">--</span></div>
+      <div class="map-info-row"><span class="lbl">الطلب</span><span class="val" id="ep-active-items">--</span></div>
+      <div class="map-info-row"><span class="lbl">عنوان التوصيل</span><span class="val" id="ep-active-addr">--</span></div>
+      <div class="map-info-row" id="ep-active-price-row" style="display:none"><span class="lbl">السعر الفعلي (ج.م)</span><input type="number" id="ep-active-price-inp" class="inp" style="width:110px;padding:6px" placeholder="0"></div>
+      <button class="btn-p" id="ep-active-btn" style="margin-top:10px;width:100%" onclick="handleDriverExternalAction()">--</button>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn-outline" style="flex:1;font-size:12px" onclick="reportItemUnavailableFromPanel()">المنتج غير متوفر</button>
+        <button class="btn-outline" style="flex:1;font-size:12px" onclick="reportBudgetExceededFromPanel()">السعر أعلى من المتوقع</button>
+      </div>
     </div>
     <div class="drv-extra" id="drv-extra"><div class="de"><span class="di">📦</span><span class="dv" id="drv-total-ords">0</span><span class="dl">إجمالي الطلبات</span></div><div class="de"><span class="di">💰</span><span class="dv" id="drv-month-earn">0 ج</span><span class="dl">أرباح الشهر</span></div></div>
     <div class="drv-ords"><div class="sec-hdr" style="padding:0 14px 10px"><span class="sec-title">الطلبات الحالية</span></div><div id="drv-ords-list"></div></div>
@@ -484,18 +559,18 @@
         <button class="withdraw-btn" onclick="showToast('سحب الأموال قريباً 💰')">سحب الأرباح ←</button>
       </div>
       <div class="menu-list">
-        <button class="menu-item" onclick="showToast('التقييمات قريباً')"><div class="mi-ic">⭐</div><div class="mi-text"><strong>تقييماتي</strong><small id="drv-prof-rating-sub">4.8 من 5</small></div><span class="mi-arr">←</span></button>
-        <button class="menu-item" onclick="showToast('تغيير العنوان قريباً')"><div class="mi-ic">📍</div><div class="mi-text"><strong>عنواني</strong><small>تعديل العنوان الافتراضي</small></div><span class="mi-arr">←</span></button>
-        <button class="menu-item" onclick="doLogout()"><div class="mi-ic" style="background:rgba(239,68,68,.1)">🚪</div><div class="mi-text"><strong>تسجيل الخروج</strong><small>خروج من حسابك</small></div><span class="mi-arr">←</span></button>
+        <button class="menu-item" onclick="showToast('التقييمات قريباً')"><div class="mi-ic"><span data-icon="star" data-size="18"></span></div><div class="mi-text"><strong>تقييماتي</strong><small id="drv-prof-rating-sub">4.8 من 5</small></div><span class="mi-arr" data-icon="chevron-left" data-size="16"></span></button>
+        <button class="menu-item" onclick="showToast('تغيير العنوان قريباً')"><div class="mi-ic"><span data-icon="map-pin" data-size="18"></span></div><div class="mi-text"><strong>عنواني</strong><small>تعديل العنوان الافتراضي</small></div><span class="mi-arr" data-icon="chevron-left" data-size="16"></span></button>
+        <button class="menu-item" onclick="doLogout()"><div class="mi-ic" style="background:rgba(239,68,68,.1);color:var(--color-danger)"><span data-icon="log-out" data-size="18"></span></div><div class="mi-text"><strong>تسجيل الخروج</strong><small>خروج من حسابك</small></div><span class="mi-arr" data-icon="chevron-left" data-size="16"></span></button>
       </div>
     </div>
   </div>
 
   <div class="bottom-nav">
-    <button class="nav-item active" onclick="drvNav('home',this)"><span class="nav-ic">📦</span>طلبات</button>
-    <button class="nav-item" onclick="drvNav('stats',this)"><span class="nav-ic">📊</span>إحصائيات</button>
-    <button class="nav-item" onclick="drvNav('profile',this)"><span class="nav-ic">👤</span>حسابي</button>
-    <button class="nav-item" onclick="toggleDriverMap()"><span class="nav-ic">🗺️</span>خريطة</button>
+    <button class="nav-item active" onclick="drvNav('home',this)"><span class="nav-ic" data-icon="package" data-size="20"></span>طلبات</button>
+    <button class="nav-item" onclick="drvNav('stats',this)"><span class="nav-ic" data-icon="bar-chart-2" data-size="20"></span>إحصائيات</button>
+    <button class="nav-item" onclick="drvNav('profile',this)"><span class="nav-ic" data-icon="user" data-size="20"></span>حسابي</button>
+    <button class="nav-item" onclick="toggleDriverMap()"><span class="nav-ic" data-icon="map" data-size="20"></span>خريطة</button>
   </div>
 </div>
 
@@ -515,7 +590,7 @@
 
 <!-- ===== ADMIN PANEL ===== -->
 <div id="screen-admin" class="screen">
-  <div class="adm-top"><div class="adm-logo">MO<span>VA</span></div><div style="display:flex;gap:8px"><button class="icon-btn" onclick="openNotifs()" style="color:#fff;background:rgba(255,255,255,.1)">🔔<span class="badge" id="adm-notif-c">0</span></button><button class="icon-btn" onclick="admLogoutConfirm()" style="color:#fff;background:rgba(255,255,255,.1)" title="تسجيل الخروج">🚪</button></div></div>
+  <div class="adm-top"><div class="adm-logo">MO<span>VA</span></div><div style="display:flex;gap:8px"><button class="icon-btn" onclick="openNotifs()" style="color:#fff;background:rgba(255,255,255,.1)"><span data-icon="bell" data-size="20"></span><span class="badge" id="adm-notif-c">0</span></button><button class="icon-btn" onclick="admLogoutConfirm()" style="color:#fff;background:rgba(255,255,255,.1)" title="تسجيل الخروج"><span data-icon="log-out" data-size="20"></span></button></div></div>
   <div class="adm-nav">
     <button class="adm-nb active" onclick="admNav('dashboard',this)">📊 لوحة</button>
     <button class="adm-nb" onclick="admNav('drivers',this)">🛵 مناديب</button>
@@ -690,16 +765,18 @@
   <div class="modal-sheet">
     <div class="modal-handle"></div>
     <div class="modal-title">📋 اطلب أي حاجة</div>
-    <p style="font-size:13px;color:var(--mu);margin-bottom:12px">اكتب اللي محتاجه وإحنا هنجيبهولك</p>
+    <p style="font-size:13px;color:var(--mu);margin-bottom:12px">اكتب اللي محتاجه وإحنا هنجيبهولك من أي مكان</p>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
       <button class="mb2 mb-view" onclick="quickReq('محتاج 2 كيلو فراخ')">🐔 فراخ</button>
       <button class="mb2 mb-view" onclick="quickReq('محتاج روشتة أدوية')">💊 أدوية</button>
       <button class="mb2 mb-view" onclick="quickReq('محتاج خبز وسمن')">🍞 خبز</button>
     </div>
+    <div class="inp-g"><label>اسم المكان</label><input type="text" id="ep-place-name" class="inp" placeholder="مثلاً: صيدلية العزبي، سوبر ماركت..."></div>
     <textarea id="any-req-txt" class="inp" rows="3" placeholder="اكتب طلبك هنا..." style="margin-bottom:8px;resize:none"></textarea>
+    <div class="inp-g"><label>ميزانية تقريبية (اختياري)</label><input type="number" id="ep-budget" class="inp" placeholder="مثلاً: 150"></div>
     <div class="inp-g"><label>عنوانك</label><input type="text" id="any-req-addr" class="inp" placeholder="المنايف، أبو صوير - الإسماعيلية"></div>
     <div class="modal-acts">
-      <button class="btn-ok" onclick="sendAnyReq()">إرسال</button>
+      <button class="btn-ok" onclick="sendExternalPurchase()">إرسال</button>
       <button class="btn-outline" onclick="closeModal('any-req-modal')">إلغاء</button>
     </div>
   </div>
