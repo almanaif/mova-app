@@ -291,7 +291,7 @@ export async function dispatchRide(rideId) {
     where('role', '==', 'driver'),
     where('status', '==', 'active'),
     where('isOnline', '==', true),
-    where('activeRideId', '==', null));
+    where('activeRideId', '==', null), where('activeOrderId', '==', null), where('activeExternalPurchaseId', '==', null));
   const snap = await getDocs(q);
 
   const candidates = [];
@@ -361,7 +361,7 @@ export async function acceptRideOffer() {
       if (!ride || ride.status !== RIDE_STATUS.DRIVER_OFFERED) throw new Error('ride-not-offered');
       if (ride.driverId) throw new Error('already-assigned');
       if (!Array.isArray(ride.candidateDriverIds) || !ride.candidateDriverIds.includes(window.CU.uid)) throw new Error('not-a-candidate');
-      if (!drv || drv.status !== 'active' || drv.isOnline !== true || drv.activeRideId) throw new Error('driver-not-eligible');
+      if (!drv || drv.status !== 'active' || drv.isOnline !== true || drv.activeRideId || drv.activeOrderId || drv.activeExternalPurchaseId) throw new Error('driver-not-eligible');
       const updatePayload = {
         driverId: window.CU.uid,
         status: RIDE_STATUS.DRIVER_ASSIGNED,

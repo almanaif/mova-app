@@ -3,6 +3,10 @@
 import { onSnapshot as _onSnapshotRaw } from './firebase.js';
 import { renderProds } from './customer.js';
 import { dregInit } from './driver.js';
+import { icon } from './icons.js';
+
+// Toast type ('ok'/'err'/'inf') → أيقونة موحدة (Design System §18) بدل الاعتماد على اللون بس
+const TOAST_ICON = { ok: 'check-circle', err: 'alert-circle', inf: 'info' };
 
 // ===== LISTENER REGISTRY (تنظيف onSnapshot تلقائيًا عند تسجيل الخروج) =====
 // أي كود في الملف بينده onSnapshot(...) بيتسجل هنا تلقائيًا من غير ما نلمس كل مكان مستخدم فيه.
@@ -131,7 +135,7 @@ export async function secureCloudinaryUpload(file) {
 
 // ===== HELPERS =====
 export function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');window.scrollTo(0,0);if(id==='screen-driver-register')dregInit();}
-export function showToast(msg,type=''){const t=document.getElementById('toast');t.textContent=msg;t.className='toast'+(type?' '+type:'');t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
+export function showToast(msg,type=''){const t=document.getElementById('toast');const ic=TOAST_ICON[type]||'info';t.innerHTML=icon(ic,18)+'<span>'+esc(msg)+'</span>';t.className='toast'+(type?' '+type:'');t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
 export function showErr(msg){const e=document.getElementById('err-msg');e.textContent=msg;e.style.display='block';e.scrollIntoView({behavior:'smooth',block:'center'});}
 export function setLoad(btnId,spId,on){const btn=document.getElementById(btnId);const sp=spId?document.getElementById(spId):null;if(btn)btn.disabled=on;if(sp)sp.style.display=on?'block':'none';}
 export function callStore(num){window.location.href='tel:'+num;}

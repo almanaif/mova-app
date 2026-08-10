@@ -152,7 +152,7 @@ export async function acceptOrderAsDriver(orderId, driverUid, driverName, driver
   let orderForNotif = null;
   await runTransaction(db, async (t) => {
     const uSnap = await t.get(userRef);
-    if (uSnap.data()?.activeOrderId) throw new Error('busy');
+    if (uSnap.data()?.activeOrderId || uSnap.data()?.activeRideId || uSnap.data()?.activeExternalPurchaseId) throw new Error('busy');
     const oSnap = await t.get(orderRef);
     const cur = oSnap.data();
     if (!cur || cur.driverId) throw new Error('taken');

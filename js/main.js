@@ -1,7 +1,7 @@
 // ===== main.js — نقطة الدخول: يجمّع كل الموديولات، يربطها بـ window عشان أزرار onclick في
 // الواجهة تلاقيها، يجهّز PWA، ويستمع لحالة تسجيل الدخول في Firebase =====
 
-import { db, auth, doc, getDoc, setDoc, serverTimestamp, onAuthStateChanged, getRedirectResult,
+import { db, auth, doc, getDoc, onAuthStateChanged, getRedirectResult,
          isSignInWithEmailLink, signInWithEmailLink } from './firebase.js';
 import { Logger, initOfflineHandling, callCurrentStore, callStore, closeModal, filterProds, openNotifs, openWA, setLoad, showErr, showScreen, showToast, waCurrentStore } from './utils.js';
 import { markNotifRead, startNotifListener, registerNotificationsResets } from './notifications.js';
@@ -13,8 +13,14 @@ import { delProd, loadMerchantData, loadMerchantOrders, loadMerchantProds, merch
 import { admAccDrv, admAccStore, admDelProd, admLogoutConfirm, admNav, admRejDrv, admRejStore, admUpdOrd, closeReasonModal, closeStoreManage, confirmReasonModal, delBanner, delCat, delCoupon, editBanner, editCat, editCoupon, filtDrvs, filtOrds, loadAdminData, loadAuditLog, loadMoreDrivers, loadMoreMerchants, loadMoreOrders, logAudit, openAddBanner, openAddCat, openAddCoupon, openDrvModal, openEditProd, openReasonModal, openStoreManage, renderAdminBanners, renderAdminCats, renderAdminCoupons, saveBanner, saveCat, saveComm, savePricingSettings, saveCoupon, saveEditProd, smDeleteCover, smDeleteStore, smQuickActivate, smQuickPause, smSaveProfile, smSetAccountStatus, smSetOpen, smTab, smUploadCover, smUploadLogo, toggleProdAvail, uploadBannerImg, registerAdminResets } from './admin.js';
 import { onCustomerSearchInput, filterCustomersByStatus, loadMoreCustomers, openCustomerDetails, closeCustomerDetails, saveCustomerBasicInfo, toggleCustomerBlock, softDeleteCustomer, loadMoreCustomerOrders, registerCustomerListReset } from './admin-customers.js';
 import { loadMoreMerchantRequests, loadMoreAnyRequests, acceptMerchantRequest, rejectMerchantRequest, addNoteToMerchantRequest, acceptAnyRequest, rejectAnyRequest, addNoteToAnyRequest } from './admin-requests.js';
-import { doLogin, doLogout, doRegister, hideLoading, loginGoogle, pickEntryType, routeUser, selectRole, showEmailOTP, showForgot, switchTab, syncToHubSpot, updateEntryLabel } from './auth.js';
+import { completeRegistration, doLogin, doLogout, doRegister, firebaseAuthErrorMessage, handleGoogleAccountConflict, hideLoading, loginGoogle, pickEntryType, routeUser, selCMCat, showEmailOTP, showForgot, submitMerchantProfile, switchTab, syncToHubSpot, updateEntryLabel } from './auth.js';
 import { openRideRequest, resetRideRequest, selectRideVehicle, createRideRequest, acceptRideOffer, rejectRideOffer, retryDispatch, handleDriverRideAction, registerRidesResets } from './rides.js';
+import { sendExternalPurchase, retryExternalDispatch, acceptExternalOffer, rejectExternalOffer, handleDriverExternalAction, reportItemUnavailableFromPanel, reportBudgetExceededFromPanel, epCustomerCancel, epCustomerContinue, epCloseStatus, registerExternalResets } from './external.js';
+import { renderIcons } from './icons.js';
+
+// MOVA Design System v1.0: يملأ كل عناصر [data-icon] الثابتة في index.html بالـ SVG
+// المناظر من نظام الأيقونات الموحد (بديل الـ Emoji). Presentation فقط — صفر منطق عمل.
+renderIcons();
 
 // كل موديول عنده أعلام subscribe (زي productsUnsub) بيسجّل دالة تصفيرها هنا -- لازم يتنفذوا
 // بعد ما كل الموديولات خلصت تحميل (يعني هنا في main.js تحديدًا) عشان نتجنب مشكلة
@@ -29,6 +35,7 @@ registerMerchantResets();
 registerAdminResets();
 registerCustomerListReset();
 registerRidesResets();
+registerExternalResets();
 
 // ===== EXPOSE TO WINDOW =====
 // app.js (اتقسم دلوقتي لموديولات) بيتحمّل كـ ES module، فالدوال في الأعلى مش بتبقى
@@ -55,9 +62,12 @@ Object.assign(window, {
   saveCat, saveComm, savePricingSettings, saveCoupon, saveEditProd, smDeleteCover, smDeleteStore, smQuickActivate,
   smQuickPause, smSaveProfile, smSetAccountStatus, smSetOpen, smTab, smUploadCover,
   smUploadLogo, toggleProdAvail, uploadBannerImg, doLogin, doLogout, doRegister, hideLoading,
-  loginGoogle, pickEntryType, routeUser, selectRole, showEmailOTP, showForgot, switchTab,
+  loginGoogle, pickEntryType, routeUser, completeRegistration, submitMerchantProfile, selCMCat, showEmailOTP, showForgot, switchTab,
   syncToHubSpot, updateEntryLabel, openRideRequest, resetRideRequest, selectRideVehicle, createRideRequest,
-  acceptRideOffer, rejectRideOffer, retryDispatch, handleDriverRideAction
+  acceptRideOffer, rejectRideOffer, retryDispatch, handleDriverRideAction,
+  sendExternalPurchase, retryExternalDispatch, acceptExternalOffer, rejectExternalOffer,
+  handleDriverExternalAction, reportItemUnavailableFromPanel, reportBudgetExceededFromPanel,
+  epCustomerCancel, epCustomerContinue, epCloseStatus
 });
 
 // ===== PWA =====
@@ -75,8 +85,10 @@ try {
 // ===== AUTH STATE LISTENER =====
 getRedirectResult(auth).catch(e => {
   console.log('Redirect result error:', e);
-  if (e?.code && e.code !== 'auth/no-auth-event') {
-    setTimeout(() => showToast('خطأ Google: ' + e.code, 'err'), 1500);
+  if (e?.code === 'auth/account-exists-with-different-credential') {
+    setTimeout(() => handleGoogleAccountConflict(e), 800);
+  } else if (e?.code && e.code !== 'auth/no-auth-event') {
+    setTimeout(() => showToast(firebaseAuthErrorMessage(e), 'err'), 1500);
   }
 });
 
@@ -90,7 +102,7 @@ if (isSignInWithEmailLink(auth, window.location.href)) {
         window.history.replaceState({}, document.title, window.location.pathname);
       })
       .catch(e => {
-        showToast('فشل تسجيل الدخول بالرابط: ' + (e.message || e.code), 'err');
+        showToast(firebaseAuthErrorMessage(e), 'err');
         window.history.replaceState({}, document.title, window.location.pathname);
       });
   }
@@ -105,31 +117,27 @@ onAuthStateChanged(auth, async user => {
       const ud = await getDoc(doc(db,'users',user.uid));
       if (ud.exists()) {
         window.CUD = ud.data();
+        // Resume Registration (Auth V2): تاجر عنده users/{uid} لكن من غير stores/{uid} - تسجيل
+        // قديم لم يكتمل (كان ده الـ Bug المكتشف في مراجعة Google Sign-In). يُعامل كتسجيل غير
+        // مكتمل، صفر مستند جديد بيتعمل، بس بيرجعله لنفس الخطوة الناقصة.
+        if (window.CUD.role === 'merchant') {
+          const sd = await getDoc(doc(db,'stores',user.uid));
+          if (!sd.exists()) { hideLoading(); showScreen('screen-complete-merchant'); return; }
+        }
         hideLoading();
         routeUser();
       } else {
-        const role = window.selectedType || 'customer';
-        const data = {
-          name: user.displayName || 'مستخدم',
-          email: user.email || '',
-          phone: '',
-          role,
-          points: 0,
-          photoURL: user.photoURL || '',
-          status: role === 'driver' ? 'pending' : 'active',
-          createdAt: serverTimestamp()
-        };
-        await setDoc(doc(db,'users',user.uid), data);
-        window.CUD = data;
-        syncToHubSpot(data);
+        // Authentication Gateway (V2): الـ Gateway هنا مسؤول عن القراءة والتوجيه بس - صفر كتابة
+        // Business Document من هنا لأي Provider (Email/Google/أي حاجة مستقبلية). أي مستخدم جديد
+        // بيتوجه لشاشة اختيار الدور، والإنشاء الفعلي بيحصل في completeRegistration() (auth.js)
+        // بس لحظة ما المستخدم يختار دوره فعليًا.
         hideLoading();
-        if (role === 'driver') showScreen('screen-driver-register');
-        else routeUser();
+        showScreen('screen-role-select');
       }
     } catch(e) {
       console.error('Auth routing error:', e);
       hideLoading();
-      showToast('حدث خطأ أثناء تحميل حسابك: ' + (e.message || e.code || e), 'err');
+      showToast(firebaseAuthErrorMessage(e), 'err');
       showScreen('screen-entry');
     }
   } else {

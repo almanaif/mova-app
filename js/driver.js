@@ -6,6 +6,7 @@ import { getNextRequestId } from './merchant.js';
 import { ORDER_STATUS, acceptOrderAsDriver, getDispatchQuery, transitionOrder } from './orders.js';
 import { updateDriverSelfLocation, initDriverRegLocationMap } from './maps.js';
 import { updateDriverLocationForActiveRide, initDriverActiveRideListener } from './rides.js';
+import { listenExternalOffers, initDriverActiveExternalListener } from './external.js';
 
 // ===== GPS / LOCATION =====
 export function getLocation() {
@@ -84,6 +85,11 @@ export function loadDriverData() {
   loadDriverOrders();
   buildChart();
   listenNewOrders();
+  // Phase 3B (External Purchase) - نفس نمط listenNewOrders() فوق بالحرف (Merchant Delivery
+  // بتبدأ الاستماع لعروضها من هنا برضه، مش من auth.js/routeUser) - أفضل نقطة تكامل ممكنة من
+  // غير أي لمسة على Authentication/Gateway (ممنوعين صراحة في نطاق هذه المرحلة).
+  listenExternalOffers();
+  initDriverActiveExternalListener();
 }
 
 // جديد (Final Engineering Review - المهمة 2): التقييم كان دايمًا 5.0 ثابت (Placeholder) حتى
