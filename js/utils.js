@@ -60,7 +60,8 @@ export const STEP_ICONS = ['🆕','✅','👨‍🍳','📦','🛵','✅'];
 export const STEP_LABELS = ['جديد','تم القبول','جاري التحضير','جاهز للاستلام','في الطريق','تم التسليم'];
 // خطوات التتبع الجديدة (Order Engine) — دي اللي شاشة تتبع الطلب بتستخدمها دلوقتي
 export const NEW_STEPS = ['waiting_merchant','merchant_accepted','searching_driver','driver_assigned','driver_arrived','picked_up','on_the_way','delivered'];
-export const NEW_STEP_ICONS = ['🕐','🏪','🔎','🛵','📍','📦','🚴','✅'];
+export const NEW_STEP_ICON_NAMES = ['clock','store','search','bike','map-pin','package','bike','check-circle'];
+export const NEW_STEP_ICONS = NEW_STEP_ICON_NAMES.map(n => icon(n, 14));
 export const NEW_STEP_LABELS = ['بانتظار التاجر','تم قبول التاجر','بحث عن مندوب','تم تعيين مندوب','وصل المندوب','تم الاستلام','في الطريق','تم التسليم'];
 // تطبيع حالة أي طلب قديم لأقرب حالة في النظام الجديد (لأغراض العرض فقط، مفيش أي تعديل على البيانات المخزنة)
 const LEGACY_STATUS_MAP = {new:'waiting_merchant',accepted:'merchant_accepted',preparing:'searching_driver',ready:'driver_assigned',delivering:'on_the_way',done:'delivered',cancelled:'cancelled'};
@@ -88,8 +89,8 @@ export function debounce(fn, wait = 300) {
 
 // ===== OFFLINE HANDLING =====
 export function initOfflineHandling() {
-  window.addEventListener('offline', () => showToast('⚠️ لا يوجد اتصال بالإنترنت', 'err'));
-  window.addEventListener('online', () => showToast('✅ تم استعادة الاتصال', 'ok'));
+  window.addEventListener('offline', () => showToast('لا يوجد اتصال بالإنترنت', 'err'));
+  window.addEventListener('online', () => showToast('تم استعادة الاتصال', 'ok'));
 }
 
 

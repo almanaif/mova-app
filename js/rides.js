@@ -57,7 +57,7 @@ import { db, collection, addDoc, getDoc, getDocs, updateDoc, doc, query, where, 
 import { showToast, showScreen, RIDE_ELIGIBLE_VEHICLES, onListenersCleared, onSnapshot } from './utils.js';
 import { getPricingConfig, calculateFare } from './pricing.js';
 import { _distMeters } from './driver.js';
-import { reverseGeocode } from './orders.js';
+import { reverseGeocode } from './routing.js';
 import { getRoute } from './routing.js';
 import { createEmojiMarker, initRideStatusMap, updateRideStatusDriverLocation, clearRideStatusMap,
          setDriverMapRideMode, setDriverMapIdleMode, OPENFREEMAP_STYLE } from './maps.js';

@@ -105,3 +105,24 @@ export function decodePolyline(encoded) {
   }
   return points;
 }
+
+// ===== REVERSE GEOCODING (Nominatim - نفس المزوّد الحالي، منقول من orders.js) =====
+// جديد (Map Sprint - Location Picker): كانت الدالة دي جوه orders.js بس (خاصة بإنشاء الطلب).
+// دلوقتي محتاجينها كمان في maps.js عشان "منتقي الموقع" (Location Picker) الجديد يعرض عنوان
+// نصي أثناء تحريك الخريطة - ونقلها هنا بدل orders.js عشان maps.js أصلًا معمول عليه import
+// من orders.js، فأي import عكسي كان هيعمل Circular Dependency. الدالة نفسها متغيرتش حرف واحد.
+export async function reverseGeocode(lat, lng) {
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=16&accept-language=ar`);
+    if (!res.ok) throw new Error('geocode-failed');
+    const data = await res.json();
+    const a = data.address || {};
+    return {
+      address: data.display_name || null,
+      city: a.city || a.town || a.county || null,
+      zone: a.suburb || a.neighbourhood || a.quarter || null,
+    };
+  } catch (e) {
+    return { address: null, city: null, zone: null }; // فشل تحديد العنوان النصي - الموقع الجغرافي هيتحفظ برضه
+  }
+}

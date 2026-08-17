@@ -1,11 +1,12 @@
 // ===== orders.js — Professional Order Engine: State Machine, Dispatch Engine, Checkout, Tracking =====
 
-import { addDoc, collection, db, doc, runTransaction, serverTimestamp, updateDoc, query, where } from './firebase.js';
+import { addDoc, collection, db, doc, getDoc, runTransaction, serverTimestamp, updateDoc, query, where } from './firebase.js';
 import { getPricingConfig, calculateFare } from './pricing.js';
 import { NEW_STEPS, NEW_STEP_ICONS, NEW_STEP_LABELS, SL, esc, normalizeStatus, onListenersCleared, onSnapshot, showScreen, showToast } from './utils.js';
 import { custNav, updateCartUI } from './customer.js';
 import { createNotification } from './notifications.js';
-import { initTrackMap } from './maps.js';
+import { initTrackMap, trackPhaseKey } from './maps.js';
+import { reverseGeocode } from './routing.js';
 
 // =====================================================================================
 // ORDER STATE MACHINE
@@ -49,11 +50,14 @@ function notifyStatusChange(orderId, order, toStatus) {
   const cfg = STATUS_NOTIF[toStatus];
   if (cfg) {
     const recipientId = order[cfg.to];
-    if (recipientId) createNotification(recipientId, cfg.title, cfg.body, cfg.type, orderId);
+    // eventKey = toStatus بالظبط: بيدي كل إشعار تغيير حالة هوية ثابتة (orderId + toStatus +
+    // recipient)، فلو نفس الانتقال اتحاول يتنفذ تاني (Retry شبكة، أكتر من Listener شغال...)
+    // Firestore Rules هترفض محاولة "الإنشاء" التانية لنفس الـ ID (راجع notifications.js).
+    if (recipientId) createNotification(recipientId, cfg.title, cfg.body, cfg.type, orderId, toStatus);
   }
   // عند الإلغاء بعد ما يكون فيه مندوب معيّن بالفعل، يتبلّغ هو كمان (مش بس العميل)
   if (toStatus === ORDER_STATUS.CANCELLED && order.driverId) {
-    createNotification(order.driverId, '❌ تم إلغاء الطلب', 'تم إلغاء الطلب اللي كنت مكلف بيه', 'yw', orderId);
+    createNotification(order.driverId, '❌ تم إلغاء الطلب', 'تم إلغاء الطلب اللي كنت مكلف بيه', 'yw', orderId, 'cancelled_driver');
   }
 }
 
@@ -117,6 +121,31 @@ export async function cancelOrder(orderId, actor, reason = '') {
   return transitionOrder(orderId, ORDER_STATUS.CANCELLED, actor, reason ? { cancelReason: reason } : {});
 }
 
+// الحالات اللي لسه يقدر فيها العميل يلغي طلبه بنفسه (لحد ما يتعيّن مندوب فعليًا). مطابقة
+// لنفس القائمة الموجودة في firestore.rules (طبقة الحماية الحقيقية) - القائمة هنا للواجهة بس
+// (تحديد وقت ظهور زرار الإلغاء)، الـ Rules هي اللي بترفض فعليًا أي محاولة خارج النطاق ده.
+export const CUSTOMER_CANCELLABLE_STATUSES = [
+  ORDER_STATUS.WAITING_MERCHANT, ORDER_STATUS.MERCHANT_ACCEPTED,
+  ORDER_STATUS.SEARCHING_DRIVER, ORDER_STATUS.DRIVER_ASSIGNED,
+];
+// نفس الفكرة للتاجر - يقدر يلغي لحد ما المندوب يوصل فعليًا (driver_arrived)، بعد كده لأ.
+export const MERCHANT_CANCELLABLE_STATUSES = [
+  ORDER_STATUS.MERCHANT_ACCEPTED, ORDER_STATUS.SEARCHING_DRIVER,
+  ORDER_STATUS.DRIVER_ASSIGNED, ORDER_STATUS.DRIVER_ARRIVED,
+];
+
+// إلغاء العميل لطلبه - بيستخدم نفس معمارية cancelOrder/transitionOrder/runTransaction
+// (مفيش updateDoc مباشر من واجهة العميل). الحماية الحقيقية (مين يقدر يلغي وامتى) موجودة في
+// Firestore Rules - الفحص هنا بس عشان رسالة خطأ واضحة للمستخدم قبل حتى ما نبعت الطلب.
+export async function custCancelOrder(orderId, actor, reason = '') {
+  return cancelOrder(orderId, actor, reason);
+}
+
+// إلغاء التاجر لطلب متجره - نفس المعمارية بالظبط، بدون أي آلية موازية.
+export async function merchCancelOrd(orderId, actor, reason = '') {
+  return cancelOrder(orderId, actor, reason);
+}
+
 // =====================================================================================
 // DISPATCH ENGINE
 // =====================================================================================
@@ -169,7 +198,7 @@ export async function acceptOrderAsDriver(orderId, driverUid, driverName, driver
     t.update(userRef, { activeOrderId: orderId });
   });
   if (orderForNotif) {
-    createNotification(orderForNotif.customerId, '🛵 تم تعيين مندوب لطلبك', `${driverName || 'المندوب'} في طريقه لاستلام طلبك من المتجر`, 'or', orderId);
+    createNotification(orderForNotif.customerId, '🛵 تم تعيين مندوب لطلبك', `${driverName || 'المندوب'} في طريقه لاستلام طلبك من المتجر`, 'or', orderId, 'driver_assigned');
   }
 }
 
@@ -193,21 +222,7 @@ export async function merchantRespond(orderId, accept, actor) {
 // لو نجح تحديدهم من الإحداثيات). لو فشل تحديد العنوان النصي، برضه بيتحفظ الموقع الجغرافي
 // (مطلوب صراحة). عشان نضمن "العميل يختار موقعه" فعليًا (مش يبعت طلب من غير أي موقع)، بقى
 // إتمام الطلب يشترط إن getLocation() يكون اتضغط قبل كده في نفس الجلسة (window.userLat/Lng).
-export async function reverseGeocode(lat, lng) {
-  try {
-    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=16&accept-language=ar`);
-    if (!res.ok) throw new Error('geocode-failed');
-    const data = await res.json();
-    const a = data.address || {};
-    return {
-      address: data.display_name || null,
-      city: a.city || a.town || a.county || null,
-      zone: a.suburb || a.neighbourhood || a.quarter || null,
-    };
-  } catch (e) {
-    return { address: null, city: null, zone: null }; // فشل تحديد العنوان النصي - الموقع الجغرافي هيتحفظ برضه
-  }
-}
+// reverseGeocode() نُقلت لـ routing.js (Map Sprint) عشان maps.js يقدر يستخدمها كمان من غير Circular Import.
 
 export async function goCheckout() {
   if (!window.cart.length) { showToast('السلة فارغة!', 'err'); return; }
@@ -237,11 +252,31 @@ export async function goCheckout() {
     const orderStoreName = firstItem?.storeName || 'متجر';
     if (!orderStoreId) { showToast('حدث خطأ في تحديد المتجر', 'err'); return; }
 
-    const geo = await reverseGeocode(window.userLat, window.userLng);
+    // جديد: العنوان المخزّن من منتقي الموقع مايتستخدمش إلا لو لسه بيطابق آخر إحداثيات فعلية
+    // (userLat/Lng) - لو getLocation() (GPS تلقائي) اشتغل تاني بعد كده وغيّرهم من غير ما
+    // العميل يفتح المنتقي تاني، العنوان القديم يبقى غير موثوق فنرجع لـ reverseGeocode حقيقي.
+    const locMatches = window.userLocAddressFor &&
+      window.userLocAddressFor.lat === window.userLat && window.userLocAddressFor.lng === window.userLng;
+    const geo = (window.userLocAddress && locMatches)
+      ? { address: window.userLocAddress, city: window.userLocCity || null, zone: window.userLocZone || null } // العميل أكّد الموقع فعليًا من منتقي الموقع - نفس البيانات اللي شافها بالظبط، بدل طلب reverseGeocode تاني لنفس الإحداثيات
+      : await reverseGeocode(window.userLat, window.userLng);
     const pickupLocation = {
       latitude: window.userLat, longitude: window.userLng,
       address: geo.address, city: geo.city, zone: geo.zone,
     };
+    // جديد (Sprint 3.7 - Store Location): وثائق /stores الحالية مفيهاش lat/lng على الإطلاق
+    // (اتفحصت فعليًا - صفر متجر عنده إحداثيات مسجلة دلوقتي)، فكل خرائط التوصيل كانت بترسم
+    // "المتجر" على نقطة ثابتة واحدة (STORE_LOC) لكل المتاجر - مش حقيقية. مفيش افتراض بيانات
+    // هنا: بنحاول نقرا lat/lng من وثيقة المتجر لو موجودة (Best-effort، مفيش تأثير لو مش
+    // موجودة)، ولو موجودة بتتحفظ على الطلب نفسه (زي customerLat/Lng بالظبط) عشان خريطة
+    // التتبع تستخدمها لو موجودة، وترجع تلقائيًا للنقطة الثابتة القديمة (fallback في maps.js)
+    // لو مش موجودة - صفر بيانات مُخترعة، وصفر كسر لأي متجر حالي.
+    let storeLat = null, storeLng = null;
+    try {
+      const storeSnap = await getDoc(doc(db, 'stores', orderStoreId));
+      const sd = storeSnap.exists() ? storeSnap.data() : null;
+      if (sd && typeof sd.lat === 'number' && typeof sd.lng === 'number') { storeLat = sd.lat; storeLng = sd.lng; }
+    } catch (e) { /* Best-effort - فشل قراءة إحداثيات المتجر مايوقفش إنشاء الطلب */ }
 
     const now = Date.now();
     // جديد (حماية رقم العميل - Option B): customerPhone متسابش هنا وقت الإنشاء خالص.
@@ -256,6 +291,8 @@ export async function goCheckout() {
       pickupLocation,
       // للتوافق مع الكود القديم اللي بيقرأ customerLat/Lng مباشرة (خرائط التتبع مثلاً)
       customerLat: window.userLat, customerLng: window.userLng,
+      // جديد (Sprint 3.7): null لحد ما المتاجر تتجهز بإحداثيات حقيقية - راجع الشرح فوق
+      storeLat, storeLng,
       statusHistory: [
         { from: null, to: ORDER_STATUS.CREATED, at: now, by: { type: 'customer', uid: window.CU.uid } },
         { from: ORDER_STATUS.CREATED, to: ORDER_STATUS.WAITING_MERCHANT, at: now, by: 'system' },
@@ -269,8 +306,8 @@ export async function goCheckout() {
     window.CUD = { ...window.CUD, points: newPts };
     showScreen('screen-customer');
     custNav('orders', document.querySelectorAll('#screen-customer .nav-item')[1]);
-    createNotification(orderStoreId, '🆕 طلب جديد', `طلب جديد من ${window.CUD?.name || 'عميل'} بقيمة ${total} ج`, 'or', ref.id);
-    createNotification(window.CU.uid, '✅ تم استقبال طلبك!', 'بانتظار موافقة المتجر على طلبك', 'or', ref.id);
+    createNotification(orderStoreId, '🆕 طلب جديد', `طلب جديد من ${window.CUD?.name || 'عميل'} بقيمة ${total} ج`, 'or', ref.id, 'order_created_merchant');
+    createNotification(window.CU.uid, '✅ تم استقبال طلبك!', 'بانتظار موافقة المتجر على طلبك', 'or', ref.id, 'order_created_customer');
     setTimeout(() => openTrack(ref.id), 1500);
   } catch (e) {
     if (e?.code === 'permission-denied') showToast('حسابك موقوف حاليًا، تواصل مع الدعم', 'err');
@@ -284,6 +321,13 @@ export async function goCheckout() {
 // ORDER TRACKING
 // =====================================================================================
 export let trackUnsub = null;
+// جديد (Map Professionalization Sprint): initTrackMap(o) كانت بتتنادى في كل مرة الـ Listener
+// يستقبل أي تحديث للطلب (حتى لو التحديث مالوش علاقة بالخريطة، زي statusHistory أو total) -
+// يعني إعادة إنشاء الخريطة بالكامل (map.remove() + إعادة بناء) + دلوقتي كمان طلب Routing جديد
+// (OSRM) - في كل نبضة Firestore. بنحتفظ هنا بآخر orderId/driverId عملنا عليهم init فعليًا،
+// ومنعيدش الـ init إلا لو الطلب اتغير فعلًا أو المندوب اتعيّن/اتغيّر (المسار والمتجر والعميل
+// ثابتين، فمفيش داعي لإعادة الحساب لمجرد تحديث حالة أو إجمالي).
+let _trackMapFor = { orderId: null, driverId: undefined, phase: undefined };
 export function openTrack(ordId) {
   showScreen('screen-track');
   if (trackUnsub) { try { trackUnsub(); } catch (e) {} trackUnsub = null; }
@@ -294,7 +338,9 @@ export function openTrack(ordId) {
     window._currentTrackOrd = o;
     const status = normalizeStatus(o.status || 'waiting_merchant');
     document.getElementById('track-driver').textContent = o.driverName || 'بانتظار المندوب...'; // textContent آمنة أصلاً ومش محتاجة esc()
-    document.getElementById('track-eta').textContent = '15-25 دقيقة';
+    // جديد (Map Professionalization Sprint): كان في نص ثابت "15-25 دقيقة" لكل الطلبات هنا -
+    // اتشال. initTrackMap() في maps.js دلوقتي هي المسؤولة عن حساب/عرض وقت التوصيل الحقيقي
+    // (ومسافة حقيقية كمان) لأنها هي اللي عندها بيانات المسار الفعلي (متجر->عميل).
     document.getElementById('track-total').textContent = (o.total || 0) + ' ج';
 
     // بيانات اتصال المندوب — تظهر فقط بعد تعيين مندوب فعليًا (driver_assigned فأعلى)، عشان
@@ -329,8 +375,25 @@ export function openTrack(ordId) {
     }
     // Rating section
     document.getElementById('rating-section').style.display = status === ORDER_STATUS.DELIVERED ? 'block' : 'none';
-    // Init map
-    initTrackMap(o);
+    // زرار إلغاء الطلب - بيظهر بس والحالة لسه ضمن الحالات المسموح فيها للعميل يلغي (راجع
+    // custCancelOrder في orders.js) - إخفاء الزرار هنا UX بس، الحماية الحقيقية في Rules.
+    const cancelBox = document.getElementById('track-cancel-box');
+    if (cancelBox) {
+      if (CUSTOMER_CANCELLABLE_STATUSES.includes(status)) {
+        cancelBox.style.display = 'block';
+        cancelBox.innerHTML = `<button class="btn-p" style="background:var(--danger)" onclick="custCancelOrderUI('${ordId}')">إلغاء الطلب</button>`;
+      } else {
+        cancelBox.style.display = 'none';
+        cancelBox.innerHTML = '';
+      }
+    }
+    // Init map - بس لو أول مرة لنفس الطلب، أو المندوب اتغيّر، أو "مرحلة" الحالة اتغيّرت (قبل/بعد
+    // الاستلام - عشان اتجاه المسار يتحدّث فعليًا، راجع trackPhaseKey في maps.js) - مش مع كل تحديث
+    const phase = trackPhaseKey(status);
+    if (_trackMapFor.orderId !== ordId || _trackMapFor.driverId !== (o.driverId || null) || _trackMapFor.phase !== phase) {
+      _trackMapFor = { orderId: ordId, driverId: o.driverId || null, phase };
+      initTrackMap(o, status);
+    }
   });
 }
 
@@ -349,5 +412,6 @@ export function listenSettings() {
 export function registerOrdersResets() {
   onListenersCleared(() => {
     settingsUnsub = null; trackUnsub = null;
+    _trackMapFor = { orderId: null, driverId: undefined, phase: undefined };
   });
 }

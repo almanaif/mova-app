@@ -2,7 +2,31 @@
 
 import { addDoc, collection, db, getCountFromServer, limit, orderBy, query, serverTimestamp, where } from './firebase.js';
 import { SC, SL, NEW_STEPS, NEW_STEP_ICONS, NEW_STEP_LABELS, callStore, closeModal, debounce, esc, escJs, filterProds, normalizeStatus, onListenersCleared, onSnapshot, openWA, showScreen, showToast } from './utils.js';
-import { ORDER_STATUS, openTrack } from './orders.js';
+import { ORDER_STATUS, custCancelOrder, openTrack } from './orders.js';
+import { icon } from './icons.js';
+import { openLocationPicker } from './maps.js';
+
+// ===== LOCATION PICKER WIRING (Map Sprint - القسم 2: العميل مش لازم يقتصر على GPS بس) =====
+// جديد: زرار العنوان أعلى الشاشة كان بيعرض نص عنوان ثابت (Hardcoded) طول الوقت مهما كان
+// موقع العميل الحقيقي إيه، وبيضغط بس getLocation() (GPS صامت من غير أي تأكيد). دلوقتي بيفتح
+// شاشة اختيار موقع حقيقية (خريطة + تحريك + تأكيد)، وبيحدّث نص العنوان بالعنوان المؤكد فعليًا.
+// GPS التلقائي عند تسجيل الدخول (auth.js) اتساب زي ما هو تمامًا كـ"نقطة بداية مريحة" فقط -
+// لسه مطلوب من العميل يأكد الموقع صراحة عشان يتغير فعليًا عنوان الطلب.
+export function openCustomerLocationPicker() {
+  openLocationPicker({
+    title: 'تحديد موقع التسليم',
+    initialLoc: window.userLat ? [window.userLat, window.userLng] : null,
+    onConfirm: ({ lat, lng, address, city, zone }) => {
+      window.userLat = lat; window.userLng = lng;
+      window.userLocAddress = address || null; // بيتقرأ في goCheckout() بدل تكرار reverseGeocode لنفس النقطة
+      window.userLocCity = city || null; window.userLocZone = zone || null;
+      window.userLocAddressFor = { lat, lng }; // للتأكد إن العنوان المخزّن لسه بيطابق آخر إحداثيات فعلية (راجع goCheckout)
+      const hdrEl = document.querySelector('.hdr-loc strong');
+      if (hdrEl) hdrEl.textContent = address || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+      showToast('✅ تم تأكيد موقع التسليم', 'ok');
+    },
+  });
+}
 
 // ===== PRODUCTS LOADER (from Firestore) =====
 export let PRODS = [];
@@ -108,7 +132,7 @@ export function loadStores() {
   storesUnsub = onSnapshot(q, snap => {
     const list = document.getElementById('stores-list');
     if (snap.empty) {
-      list.innerHTML = '<div class="empty-state" style="padding:32px 20px;color:#6B7280"><div style="font-size:44px;margin-bottom:12px">🏪</div><p style="font-size:13px;font-weight:600">لا توجد متاجر متاحة حالياً</p><small style="font-size:11px;margin-top:4px;display:block">سيتم إضافة متاجر قريباً</small></div>';
+      list.innerHTML = `<div class="empty-state"><div class="ei">${icon('store',26)}</div><p>لا توجد متاجر متاحة حالياً</p><small>سيتم إضافة متاجر قريباً</small></div>`;
       return;
     }
     let html = '';
@@ -119,15 +143,15 @@ export function loadStores() {
       const sName = m.storeName || m.name || 'متجر';
       const sPhone = m.storePhone || m.phone || '';
       html += `<div class="store-card" data-cat="${cat}">
-        <div class="store-img" style="background:linear-gradient(135deg,#1A1A2E,#0F3460)"><span style="font-size:58px">🏪</span><div class="s-open s-on">مفتوح</div></div>
+        <div class="store-img" style="background:linear-gradient(135deg,#1A1A2E,#0F3460)">${icon('store',44)}<div class="s-open s-on">مفتوح</div></div>
         <div class="store-body">
           <h3>${esc(sName)}</h3>
-          <div class="store-meta"><span>📦 توصيل متاح</span><span>🛵 رسوم التوصيل متاحة</span></div>
+          <div class="store-meta"><span>${icon('package',13)} توصيل متاح</span><span>${icon('bike',13)} رسوم التوصيل متاحة</span></div>
           <div class="store-tags"><span class="store-tag">${esc(m.category)||'بقالة'}</span></div>
           <div class="store-acts">
-            <button class="sa-btn sa-call" onclick="event.stopPropagation();callStore('${escJs(sPhone)}')">📞 اتصال</button>
-            <button class="sa-btn sa-wa" onclick="event.stopPropagation();openWA('${escJs(sPhone)}','${escJs(sName)}')">💬 واتساب</button>
-            <button class="sa-btn sa-order" onclick="showScreen('screen-store');loadProductsByStore('${d.id}','${escJs(sName)}','${escJs(sPhone)}')">🛒 اطلب</button>
+            <button class="sa-btn sa-call" onclick="event.stopPropagation();callStore('${escJs(sPhone)}')">${icon('phone',13)} اتصال</button>
+            <button class="sa-btn sa-wa" onclick="event.stopPropagation();openWA('${escJs(sPhone)}','${escJs(sName)}')">${icon('message-circle',13)} واتساب</button>
+            <button class="sa-btn sa-order" onclick="showScreen('screen-store');loadProductsByStore('${d.id}','${escJs(sName)}','${escJs(sPhone)}')">${icon('shopping-cart',13)} اطلب</button>
           </div>
         </div>
       </div>`;
@@ -216,7 +240,7 @@ export function addCart(id) {
   const ex = window.cart.find(x=>x.id===id);
   if (ex) ex.qty++; else window.cart.push({...p,qty:1});
   updateCartUI(); renderProds('all');
-  showToast('✅ أضيف للسلة','ok');
+  showToast('أضيف للسلة','ok');
 }
 export function chgQty(id,d) {
   const item = window.cart.find(x=>x.id===id); if(!item) return;
@@ -240,20 +264,20 @@ export function renderCartScreen() {
   if (barTotal) barTotal.textContent = total+' ج';
   if (bar) bar.style.display = count>0 ? 'block' : 'none';
   if (!window.cart.length) {
-    list.innerHTML = '<div class="empty-state"><div class="ei">🛒</div><p>السلة فارغة</p><small>أضف منتجات من أي متجر</small></div>';
+    list.innerHTML = `<div class="empty-state"><div class="ei">${icon('shopping-cart',26)}</div><p>السلة فارغة</p><small>أضف منتجات من أي متجر</small></div>`;
     return;
   }
   list.innerHTML = window.cart.map(c => `
-    <div style="background:#fff;border-radius:var(--r);padding:12px;margin-bottom:10px;box-shadow:var(--sh);border:1px solid var(--border);display:flex;align-items:center;gap:10px">
+    <div class="card" style="margin-bottom:10px;display:flex;align-items:center;gap:10px">
       <div style="font-size:30px">${esc(c.icon)||'🛒'}</div>
       <div style="flex:1;min-width:0">
         <h4 style="font-size:13px;font-weight:800;margin-bottom:2px">${esc(c.name)}</h4>
-        <div style="font-size:11px;color:var(--mu)">${esc(c.storeName)||''}</div>
-        <div style="font-size:13px;font-weight:900;color:var(--p);margin-top:4px">${c.price} ج</div>
+        <div style="font-size:11px;color:var(--color-text-muted)">${esc(c.storeName)||''}</div>
+        <div class="t-price" style="color:var(--color-primary);margin-top:4px">${c.price} ج</div>
       </div>
-      <div style="display:flex;flex-direction:column;align-items:center;gap:6px">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
         <div class="qty-ctrl"><button class="qty-btn" onclick="chgQty('${c.id}',-1)">−</button><span class="qty-num">${c.qty}</span><button class="qty-btn" onclick="chgQty('${c.id}',1)">+</button></div>
-        <button onclick="removeCartItem('${c.id}')" style="background:none;border:none;color:var(--danger);font-size:11px;cursor:pointer">🗑️ حذف</button>
+        <button onclick="removeCartItem('${c.id}')" style="background:none;border:none;color:var(--color-danger);font-size:11px;cursor:pointer;display:flex;align-items:center;gap:3px">${icon('trash',13)} حذف</button>
       </div>
     </div>`).join('');
 }
@@ -279,6 +303,8 @@ export function loadCustomerData() {
   if (!window.CUD) return;
   const ud = window.CUD;
   document.getElementById('cust-name').textContent = ud.name || '--';
+  const greetEl = document.getElementById('hdr-greet');
+  if (greetEl) { const first = (ud.name||'').trim().split(' ')[0]; greetEl.textContent = first ? `أهلاً ${first}` : 'أهلاً بيك'; }
   const pts = ud.points || 0;
   ['user-pts','pts-big','pts-prof','pts-menu'].forEach(id => { const el=document.getElementById(id); if(el) el.textContent=pts; });
   if (ud.photoURL) {
@@ -317,7 +343,7 @@ export function loadOrders() {
     ordersUnsub = onSnapshot(q, snap => {
       const lists = document.querySelectorAll('.orders-list-el');
       if (!lists.length) return;
-      if (snap.empty) { lists.forEach(list => list.innerHTML = '<div class="empty-state"><div class="ei">📦</div><p>لا توجد طلبات</p><small>اطلب من أي متجر</small></div>'); return; }
+      if (snap.empty) { lists.forEach(list => list.innerHTML = `<div class="empty-state"><div class="ei">${icon('package',26)}</div><p>لا توجد طلبات</p><small>اطلب من أي متجر</small></div>`); return; }
       let html = '';
       snap.forEach(d => {
         const o = {...d.data(), id:d.id};
@@ -325,19 +351,19 @@ export function loadOrders() {
         const isEnded = st === ORDER_STATUS.CANCELLED || st === ORDER_STATUS.MERCHANT_REJECTED;
         const si = NEW_STEPS.indexOf(st);
         const stepsHtml = isEnded
-          ? `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;color:var(--danger);font-size:12px;font-weight:700">❌ ${st===ORDER_STATUS.MERCHANT_REJECTED?'تم رفض الطلب من المتجر':'تم إلغاء الطلب'}</div>`
+          ? `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;color:var(--color-danger);font-size:12px;font-weight:700">${icon('alert-circle',14)} ${st===ORDER_STATUS.MERCHANT_REJECTED?'تم رفض الطلب من المتجر':'تم إلغاء الطلب'}</div>`
           : NEW_STEPS.map((s,i) => {
-              return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:38px"><div style="width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;border:2px solid ${i<=si?i<si?'var(--ok)':'var(--p)':'var(--border)'};background:${i<si?'var(--ok)':i===si?'var(--p)':'#fff'};color:${i<=si?'#fff':'var(--mu)'}">${NEW_STEP_ICONS[i]}</div><div style="font-size:8px;color:${i===si?'var(--p)':'var(--mu)'};text-align:center;margin-top:2px;white-space:nowrap;font-weight:${i===si?800:600}">${NEW_STEP_LABELS[i]}</div></div>`;
+              return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:38px"><div style="width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid ${i<=si?i<si?'var(--color-success)':'var(--color-primary)':'var(--color-border)'};background:${i<si?'var(--color-success)':i===si?'var(--color-primary)':'var(--color-surface)'};color:${i<=si?'#fff':'var(--color-text-muted)'}">${NEW_STEP_ICONS[i]}</div><div style="font-size:8px;color:${i===si?'var(--color-primary)':'var(--color-text-muted)'};text-align:center;margin-top:2px;white-space:nowrap;font-weight:${i===si?800:600}">${NEW_STEP_LABELS[i]}</div></div>`;
             }).join('');
-        html += `<div class="order-track-card" style="background:#fff;border-radius:var(--r);padding:14px;margin-bottom:10px;box-shadow:var(--sh);border:1px solid var(--border);cursor:pointer" onclick="openTrack('${d.id}')">
+        html += `<div class="order-track-card card" style="margin-bottom:10px;cursor:pointer" onclick="openTrack('${d.id}')">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-            <span style="font-size:11px;font-weight:700;color:var(--mu)">#${d.id.slice(-6).toUpperCase()}</span>
+            <span style="font-size:11px;font-weight:700;color:var(--color-text-muted)">#${d.id.slice(-6).toUpperCase()}</span>
             <span class="${SC[o.status]||'sb sb-new'}">${SL[o.status]||'جديد'}</span>
           </div>
           <div style="display:flex;gap:4px;margin-bottom:8px;overflow-x:auto">${stepsHtml}</div>
-          <div style="display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid var(--border);font-size:12px">
-            <span style="color:var(--mu)">🏪 ${esc(o.storeName)||'--'}</span>
-            <span style="font-size:14px;font-weight:900;color:var(--p)">${o.total||0} ج</span>
+          <div style="display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid var(--color-border);font-size:12px">
+            <span style="color:var(--color-text-muted);display:flex;align-items:center;gap:4px">${icon('store',13)} ${esc(o.storeName)||'--'}</span>
+            <span class="t-price" style="color:var(--color-primary)">${o.total||0} ج</span>
           </div>
         </div>`;
       });
@@ -356,6 +382,21 @@ export function custNav(tab, el) {
   if (tab==='profile') loadProfileStats();
 }
 
+
+// ===== CANCELLATION (Baseline Recovery) =====
+// بيتنده من زرار "إلغاء الطلب" اللي orders.js بيعرضه في شاشة التتبع (openTrack) بس والحالة
+// لسه مسموح فيها بالإلغاء. الحماية الحقيقية (مين يقدر يلغي وامتى) في Firestore Rules - هنا
+// بس تأكيد + استدعاء custCancelOrder (اللي بيستخدم transitionOrder/runTransaction الحقيقيين).
+export async function custCancelOrderUI(orderId) {
+  if (!orderId || !window.CU) return;
+  if (!confirm('هل أنت متأكد من إلغاء الطلب؟')) return;
+  try {
+    await custCancelOrder(orderId, { type: 'customer', uid: window.CU.uid });
+    showToast('✅ تم إلغاء الطلب', 'ok');
+  } catch (e) {
+    showToast(e?.message === 'invalid-transition' ? 'لا يمكن إلغاء الطلب في هذه المرحلة' : 'حدث خطأ، حاول مرة أخرى', 'err');
+  }
+}
 
 // ===== RATING =====
 export function selectRatingTarget(target) {
@@ -377,7 +418,7 @@ export async function submitRating() {
       comment: document.getElementById('rating-comment').value||'',
       customerId: window.CU.uid, createdAt: serverTimestamp()
     });
-    showToast('✅ شكراً لتقييمك!','ok');
+    showToast('شكراً لتقييمك!','ok');
     document.getElementById('rating-section').style.display='none';
   } catch(e) { showToast('حدث خطأ','err'); }
 }
@@ -392,9 +433,9 @@ export async function submitMerchant(){
   if(!name||!phone){showToast('يرجى تعبئة اسم المتجر والهاتف','err');return;}
   try{
     await addDoc(collection(db,'merchant_requests'),{storeName:name,phone,address:addr,status:'pending',createdAt:serverTimestamp()});
-    showToast('✅ تم إرسال طلب الانضمام! سنتواصل خلال 24 ساعة','ok');
+    showToast('تم إرسال طلب الانضمام! سنتواصل خلال 24 ساعة','ok');
     setTimeout(()=>showScreen('screen-entry'),2500);
-  }catch(e){showToast('❌ حدث خطأ أثناء إرسال الطلب، حاول مرة أخرى','err');console.error('[submitMerchant]',e);}
+  }catch(e){showToast('حدث خطأ أثناء إرسال الطلب، حاول مرة أخرى','err');console.error('[submitMerchant]',e);}
 }
 
 
@@ -406,8 +447,8 @@ export async function sendAnyReq(){
   if(!txt){showToast('يرجى كتابة طلبك','err');return;}
   try{
     await addDoc(collection(db,'any_requests'),{customerId:window.CU?.uid||'guest',customerName:window.CUD?.name||'عميل',request:txt,address:document.getElementById('any-req-addr').value,status:'new',createdAt:serverTimestamp()});
-    closeModal('any-req-modal');showToast('✅ تم إرسال طلبك! سيتواصل معك المندوب قريباً','ok');
-  }catch(e){closeModal('any-req-modal');showToast('❌ حدث خطأ أثناء إرسال الطلب، حاول مرة أخرى','err');console.error('[sendAnyReq]',e);}
+    closeModal('any-req-modal');showToast('تم إرسال طلبك! سيتواصل معك المندوب قريباً','ok');
+  }catch(e){closeModal('any-req-modal');showToast('حدث خطأ أثناء إرسال الطلب، حاول مرة أخرى','err');console.error('[sendAnyReq]',e);}
 }
 
 

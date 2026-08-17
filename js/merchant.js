@@ -1,9 +1,10 @@
 // ===== merchant.js — شاشات التاجر: الطلبات والمنتجات =====
 
-import { addDoc, collection, db, deleteDoc, doc, limit, orderBy, query, runTransaction, serverTimestamp, where } from './firebase.js';
+import { addDoc, collection, db, deleteDoc, doc, getDoc, limit, orderBy, query, runTransaction, serverTimestamp, updateDoc, where } from './firebase.js';
 import { SC, SL, closeModal, esc, normalizeStatus, onListenersCleared, onSnapshot, showToast } from './utils.js';
 import { logAudit, openEditProd } from './admin.js';
-import { ORDER_STATUS, merchantRespond, transitionOrder } from './orders.js';
+import { MERCHANT_CANCELLABLE_STATUSES, ORDER_STATUS, merchCancelOrd, merchantRespond, transitionOrder } from './orders.js';
+import { openLocationPicker } from './maps.js';
 
 // ===== MERCHANT FUNCTIONS =====
 export function loadMerchantData() {
@@ -11,6 +12,44 @@ export function loadMerchantData() {
   if (ud) document.getElementById('merch-name').textContent = ud.storeName||ud.name||'متجرك';
   loadMerchantOrders();
   loadMerchantProds();
+  refreshMerchantLocStatus();
+}
+
+// ===== STORE LOCATION (Map Sprint - القسم 3/12) =====
+// جديد: كانت وثائق /stores مفيهاش lat/lng خالص وممنوع Rules-يًا حتى لو حاول التاجر يبعتهم -
+// اتفتح المسار في firestore.rules Sprint اللي فات، ودلوقتي هنا أول واجهة فعلية بتستخدمه.
+async function refreshMerchantLocStatus() {
+  const statusEl = document.getElementById('merch-loc-status');
+  if (!statusEl || !window.CU) return;
+  try {
+    const snap = await getDoc(doc(db, 'stores', window.CU.uid));
+    const sd = snap.exists() ? snap.data() : null;
+    if (sd && typeof sd.lat === 'number' && typeof sd.lng === 'number') {
+      statusEl.textContent = '✅ الموقع محدد - اضغط للتعديل';
+      window._merchStoreLoc = [sd.lat, sd.lng];
+    } else {
+      statusEl.textContent = 'لم يتم تحديد الموقع بعد - العملاء يشوفوا موقع افتراضي';
+      window._merchStoreLoc = null;
+    }
+  } catch (e) { /* Best-effort - فشل القراءة مايكسرش لوحة التاجر */ }
+}
+
+export function openMerchantLocationPicker() {
+  if (!window.CU) return;
+  openLocationPicker({
+    title: 'تحديد موقع المتجر',
+    initialLoc: window._merchStoreLoc || null,
+    onConfirm: async ({ lat, lng }) => {
+      try {
+        await updateDoc(doc(db, 'stores', window.CU.uid), { lat, lng, updatedAt: serverTimestamp() });
+        window._merchStoreLoc = [lat, lng];
+        showToast('✅ تم حفظ موقع المتجر', 'ok');
+        refreshMerchantLocStatus();
+      } catch (e) {
+        showToast('تعذر حفظ الموقع، حاول مرة أخرى', 'err');
+      }
+    },
+  });
 }
 
 export let merchantOrdersUnsub = null;
@@ -35,6 +74,7 @@ export function loadMerchantOrders() {
           ${st===ORDER_STATUS.WAITING_MERCHANT?`<button class="mo-btn mo-acc" onclick="merchAcceptOrd('${d.id}')">✅ قبول</button><button class="mo-btn mo-rej" onclick="merchRejectOrd('${d.id}')">❌ رفض</button>`:''}
           ${(st===ORDER_STATUS.MERCHANT_ACCEPTED||st===ORDER_STATUS.SEARCHING_DRIVER)?`<span style="font-size:11px;color:var(--mu);font-weight:600">🔎 جاري البحث عن مندوب...</span>`:''}
           ${(st===ORDER_STATUS.DRIVER_ASSIGNED||st===ORDER_STATUS.DRIVER_ARRIVED)?`<span style="font-size:11px;color:var(--ok);font-weight:600">🛵 المندوب في الطريق للاستلام</span>`:''}
+          ${MERCHANT_CANCELLABLE_STATUSES.includes(st)?`<button class="mo-btn mo-rej" onclick="merchCancelOrdUI('${d.id}')">إلغاء الطلب</button>`:''}
         </div>
       </div>`;
     });
@@ -57,6 +97,21 @@ export async function merchRejectOrd(id) {
     await merchantRespond(id, false, actor);
     showToast('تم رفض الطلب','ok');
   } catch(e) { showToast(e?.message==='invalid-transition' ? 'تم اتخاذ إجراء على هذا الطلب بالفعل' : 'حدث خطأ','err'); }
+}
+
+// إلغاء التاجر لطلب من متجره - بيستخدم نفس معمارية transitionOrder/runTransaction (زي زراير
+// القبول/الرفض بالظبط)، مفيش updateDoc مباشر. الحماية الحقيقية (لحد أي حالة يقدر يلغي) في
+// Firestore Rules، والقائمة اللي بتحدد ظهور الزرار (MERCHANT_CANCELLABLE_STATUSES) مستوردة
+// من orders.js عشان تفضل مصدر واحد للحقيقة مع باقي التطبيق.
+export async function merchCancelOrdUI(id) {
+  if (!confirm('هل أنت متأكد من إلغاء هذا الطلب؟')) return;
+  try {
+    const actor = { type: 'merchant', uid: window.CU?.uid, name: window.CUD?.storeName || window.CUD?.name };
+    await merchCancelOrd(id, actor);
+    showToast('تم إلغاء الطلب', 'ok');
+  } catch (e) {
+    showToast(e?.message === 'invalid-transition' ? 'لا يمكن إلغاء الطلب في هذه المرحلة' : 'حدث خطأ', 'err');
+  }
 }
 
 export let merchantProdsUnsub = null;

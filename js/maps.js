@@ -5,8 +5,8 @@
 // ممنوع Mapbox، وممنوع Leaflet في أي مكان بعد دلوقتي (زي ما اتحدد صراحة في Phase 4B).
 
 import { DEFAULT_LOC, STORE_LOC, db, doc } from './firebase.js';
-import { onListenersCleared, onSnapshot } from './utils.js';
-import { decodePolyline } from './routing.js';
+import { onListenersCleared, onSnapshot, showToast } from './utils.js';
+import { decodePolyline, getRoute, reverseGeocode } from './routing.js';
 
 // ===== OpenFreeMap Style (الـ Style الرسمي - liberty) =====
 export const OPENFREEMAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
@@ -61,36 +61,255 @@ function fitToPoints(map, pts) {
 }
 
 // =====================================================================================
-// ===== TRACKING MAP (Delivery - زي ما هي بالظبط، Leaflet -> MapLibre بس) =====
+// ===== LOCATION PICKER (Map Sprint - شاشة واحدة مشتركة، تستخدمها شاشة الشيك أوت للعميل
+// وشاشة موقع المتجر للتاجر - بدل ما نعمل نسختين متطابقتين) =====
+// =====================================================================================
+let locPickerMap = null;
+let locPickerCurrentLoc = null; // آخر مركز فعلي للخريطة أثناء التحريك (بيتحدث في moveend)
+let locPickerGeocodeSeq = 0;    // Race Guard: تحريك سريع متتالي ممكن يطلق أكتر من reverseGeocode
+let locPickerOnConfirm = null;  // callback({lat,lng,address}) بيتنده بس لما المستخدم يضغط "تأكيد"
+
+let locPickerLastGeo = null;    // {address, city, zone} - آخر نتيجة reverseGeocode فعلية (Race-Guard-safe) لتمريرها كاملة عند التأكيد
+
+function locPickerUpdateAddress(lat, lng) {
+  const addrEl = document.getElementById('loc-picker-addr');
+  if (addrEl) addrEl.textContent = 'جاري تحديد العنوان...';
+  const mySeq = ++locPickerGeocodeSeq;
+  reverseGeocode(lat, lng).then(geo => {
+    if (mySeq !== locPickerGeocodeSeq || !addrEl) return; // رد قديم من تحريك سابق - نتجاهله
+    locPickerLastGeo = geo;
+    addrEl.textContent = geo.address || `${lat.toFixed(5)}, ${lng.toFixed(5)} (تعذر تحديد اسم العنوان)`;
+  });
+}
+
+// jsdoc: opts = { initialLoc:[lat,lng]?, title:string?, onConfirm(loc) }
+export function openLocationPicker(opts = {}) {
+  const modal = document.getElementById('loc-picker-modal');
+  if (!modal || typeof maplibregl === 'undefined') { showToast('تعذر فتح الخريطة، حاول لاحقًا', 'err'); return; }
+  document.getElementById('loc-picker-title').textContent = opts.title || 'تحديد الموقع';
+  locPickerOnConfirm = typeof opts.onConfirm === 'function' ? opts.onConfirm : null;
+  modal.classList.add('open');
+  const start = opts.initialLoc || (window.userLat ? [window.userLat, window.userLng] : STORE_LOC);
+  locPickerCurrentLoc = start;
+  locPickerLastGeo = null;
+  if (locPickerMap) { locPickerMap.remove(); locPickerMap = null; }
+  locPickerMap = new maplibregl.Map({
+    container: 'loc-picker-map', style: OPENFREEMAP_STYLE,
+    center: toLngLat(start), zoom: 15, attributionControl: false,
+  });
+  locPickerMap.on('load', () => {
+    setTimeout(() => { if (locPickerMap) locPickerMap.resize(); }, 50); // المودال كان display:none لحظة الإنشاء - تأكيد الأبعاد
+    locPickerUpdateAddress(start[0], start[1]);
+    locPickerMap.on('moveend', () => {
+      const c = locPickerMap.getCenter();
+      locPickerCurrentLoc = [c.lat, c.lng];
+      locPickerUpdateAddress(c.lat, c.lng);
+    });
+  });
+}
+
+// جديد: "استخدام موقعي الحالي" جوه منتقي الموقع - GPS بس مانتحرش (fly) الخريطة لمكان
+// المستخدم، وموقع الـ GPS بيفضل مجرد اقتراح بداية - التأكيد النهائي لسه محتاج ضغطة "تأكيد
+// الموقع" صريحة (الطلب بيستخدم الموقع المؤكد، مش GPS مباشرة).
+export function locPickerUseCurrent() {
+  if (!navigator.geolocation) { showToast('المتصفح مايدعمش تحديد الموقع', 'err'); return; }
+  showToast('📍 جاري تحديد موقعك...', '');
+  navigator.geolocation.getCurrentPosition(pos => {
+    const { latitude: lat, longitude: lng } = pos.coords;
+    if (locPickerMap) locPickerMap.flyTo({ center: [lng, lat], zoom: 16 });
+  }, err => {
+    showToast('تعذر تحديد موقعك، حرّك الخريطة يدويًا لاختيار المكان', 'err');
+  }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 });
+}
+
+// جديد (Final Map QA): زرار "إلغاء" كان بينده closeModal() العام اللي بيشيل كلاس 'open' بس -
+// من غير ما يهدم Instance الخريطة (WebGL Context) ولا الـ Listeners بتاعتها (moveend). يعني
+// كل إلغاء كان بيسيب خريطة MapLibre شغالة (مخفية بس display:none) لحد ما المستخدم يفتح
+// المنتقي تاني (وقتها openLocationPicker بتهدمها فعلًا) - استهلاك ذاكرة/GPU بلا داعي في
+// الفترة بينهم. دلوقتي زرار الإلغاء بينده الدالة دي اللي بتهدم الخريطة فورًا.
+export function closeLocationPicker() {
+  document.getElementById('loc-picker-modal').classList.remove('open');
+  if (locPickerMap) { locPickerMap.remove(); locPickerMap = null; }
+  locPickerOnConfirm = null;
+}
+
+export function locPickerConfirm() {
+  if (!locPickerCurrentLoc) return;
+  const [lat, lng] = locPickerCurrentLoc;
+  const address = locPickerLastGeo?.address || null;
+  const cb = locPickerOnConfirm;
+  const geo = locPickerLastGeo;
+  closeLocationPicker(); // بعد التأكيد كمان مفيش داعي نسيب الخريطة شغالة (نفس منطق الإلغاء)
+  if (cb) cb({ lat, lng, address, city: geo?.city || null, zone: geo?.zone || null });
+}
+
+// =====================================================================================
+// ===== TRACKING MAP (Delivery) =====
 // =====================================================================================
 export let trackDriverUnsub = null;
-export function initTrackMap(ordData) {
+let trackFitPoints = [];        // نقط الخريطة الحالية (متجر/عميل/مندوب) - يستخدمها زرار "توسيط"
+let _trackRouteReqId = 0;       // Race Guard: كل طلب Routing بياخد رقم؛ بنطبق بس آخر رد وصل لآخر طلب اتبعت
+let _trackRouteLastPos = null;  // آخر نقطة اتحسب المسار منها فعليًا (لتحديد "تحرك حقيقي" بعد كده)
+let _trackRoutePhase = null;    // 'to-customer' (متجر/مندوب -> عميل) - نستخدمها لمعرفة هل المرحلة اتغيرت
+const ROUTE_RECALC_METERS = 150; // أقل مسافة تحرك بيها المندوب عشان نطلب مسار جديد (بعد الاستلام)
+const DRIVER_STALE_MS = 90000;   // لو آخر تحديث موقع للمندوب أقدم من 90 ثانية، نعتبره "غير متاح حاليًا"
+
+// جديد (Sprint 3.7): حالات الطلب اللي المسار المفروض فيها يبقى "مندوب -> عميل" بدل "متجر ->
+// عميل" - بعد ما المندوب يستلم الطلب فعليًا من المتجر، عرض مسار المتجر بقى غير منطقي تمامًا
+// (البند 14 - IMPORTANT ROUTE LOGIC). القيم string حرفية (مش import من orders.js) عشان
+// orders.js أصلاً بيعمل import لـ maps.js - أي import عكسي هنا هيعمل Circular Dependency.
+const POST_PICKUP_STATUSES = ['picked_up', 'on_the_way'];
+const PRE_PICKUP_ROUTABLE = ['merchant_accepted', 'searching_driver', 'driver_assigned', 'driver_arrived'];
+
+function updateTrackEtaDisplay(state, routeInfo) {
+  const etaEl = document.getElementById('track-eta');
+  const distEl = document.getElementById('track-distance');
+  if (state === 'ok' && routeInfo) {
+    if (etaEl) etaEl.textContent = routeInfo.durationMinutes + ' دقيقة';
+    if (distEl) distEl.textContent = routeInfo.distanceKm + ' كم';
+  } else if (state === 'loading') {
+    if (etaEl) etaEl.textContent = 'جاري حساب المسار...';
+    if (distEl) distEl.textContent = '--';
+  } else if (state === 'no-driver') {
+    if (etaEl) etaEl.textContent = 'جاري البحث عن مندوب';
+    if (distEl) distEl.textContent = '--';
+  } else if (state === 'driver-stale') {
+    // جديد (البند 16 - DRIVER LOCATION UNAVAILABLE): بدل ما نسيب آخر وقت محسوب معروض وهو
+    // بقى غير دقيق (المندوب ممكن يكون اتحرك كتير من ساعتها)، نوضح صراحة إن الموقع مش متاح.
+    if (etaEl) etaEl.textContent = '📡 موقع المندوب غير متاح حاليًا';
+  } else if (state === 'delivered') {
+    // جديد (Final Map QA): الحالتين delivered/cancelled معندهمش أي branch قبل كده - يعني
+    // نص الوقت/المسافة كان بيفضل عالق على آخر قيمة قبل التسليم (أو "جاري تحميل الخريطة..."
+    // لو كانت أول Init). بند 8 من الـ Sprint اللي فات كان طلب صراحة "delivered: show final
+    // state cleanly" - ده التنفيذ الفعلي المفقود.
+    if (etaEl) etaEl.textContent = '✅ تم التسليم';
+    if (distEl) distEl.textContent = '--';
+  } else if (state === 'cancelled') {
+    if (etaEl) etaEl.textContent = '❌ تم إلغاء الطلب';
+    if (distEl) distEl.textContent = '--';
+  } else {
+    // فشل حساب المسار فعليًا (Routing Provider مش متاح/Timeout/لا يوجد مسار) - رسالة صادقة
+    // بدل رقم تقريبي مختلق (البند 23 - NO FAKE ETA). الخريطة والـ Markers بيفضلوا شغالين.
+    if (etaEl) etaEl.textContent = 'تعذر حساب وقت الوصول حاليًا';
+    if (distEl) distEl.textContent = '--';
+  }
+}
+
+function getEffectiveStoreLoc(ordData) {
+  // جديد (Sprint 3.7 - القسم 3): لو الطلب معاه storeLat/storeLng حقيقيين (اتسجلوا وقت
+  // الإنشاء لو وثيقة المتجر كانت عندها إحداثيات - راجع goCheckout في orders.js)، نستخدمهم.
+  // لو مش موجودين (كل المتاجر الحالية دلوقتي، لأن /stores مفيهاش lat/lng خالص لسه)، نرجع
+  // للنقطة الثابتة القديمة STORE_LOC كـ Fallback واضح - صفر بيانات مُختلقة، وده موثّق في
+  // التقرير النهائي كـ Data Migration مطلوبة على وثائق /stores.
+  if (typeof ordData?.storeLat === 'number' && typeof ordData?.storeLng === 'number') {
+    return [ordData.storeLat, ordData.storeLng];
+  }
+  return STORE_LOC;
+}
+
+// بيحسب/يرسم مسار جديد (Best-effort + Race Guard) بين نقطتين، ويحدّث عرض الوقت/المسافة.
+function computeAndDrawTrackRoute(origin, destination) {
+  const myReqId = ++_trackRouteReqId;
+  updateTrackEtaDisplay('loading');
+  getRoute({ lat: origin[0], lng: origin[1] }, { lat: destination[0], lng: destination[1] })
+    .then(r => {
+      // Race Guard (البند 10): لو طلب Routing أحدث اتبعت بعد ده (مثلًا المندوب اتحرك تاني
+      // قبل ما الرد القديم يوصل)، بنتجاهل الرد القديم عشان ميكتبش فوق نتيجة أحدث بالغلط.
+      if (myReqId !== _trackRouteReqId || !window.trackMap) return;
+      drawEncodedRoute(window.trackMap, r.polyline, 'track-route');
+      updateTrackEtaDisplay('ok', r);
+    })
+    .catch(() => { if (myReqId === _trackRouteReqId) updateTrackEtaDisplay('fail'); });
+}
+
+// جديد: مفتاح "مرحلة" الحالة - بيستخدمه orders.js عشان يقرر هل لازم يعيد initTrackMap()
+// (وبالتالي يفتح Listener جديد بقيمة status محدّثة) لما حالة الطلب تعدّي من قبل الاستلام
+// لبعد الاستلام أو العكس - orders.js مش بيبعت driverId تاني في الحالة دي، فلو معملناش كده
+// الـ Listener القديم هيفضل شغال بـ status قديم متسرّب جوه الـ closure بتاعته.
+export function trackPhaseKey(status) {
+  if (POST_PICKUP_STATUSES.includes(status)) return 'post';
+  if (PRE_PICKUP_ROUTABLE.includes(status)) return 'pre';
+  return 'other';
+}
+
+export function initTrackMap(ordData, status) {
   if (window.trackMap) { window.trackMap.remove(); window.trackMap = null; }
   window.driverMarker = null; window.customerMarker = null;
+  trackFitPoints = []; _trackRouteLastPos = null; _trackRoutePhase = null;
+  const etaEl = document.getElementById('track-eta');
+  if (etaEl) etaEl.textContent = 'جاري تحميل الخريطة...';
   if (typeof maplibregl === 'undefined') return;
+  const storeLoc = getEffectiveStoreLoc(ordData);
   window.trackMap = new maplibregl.Map({
     container: 'tracking-map', style: OPENFREEMAP_STYLE,
-    center: toLngLat(STORE_LOC), zoom: 14, attributionControl: false,
+    center: toLngLat(storeLoc), zoom: 14, attributionControl: false,
   });
   window.trackMap.on('load', () => {
-    createEmojiMarker(window.trackMap, STORE_LOC, '🏪');
-    if (window.userLat) {
-      window.customerMarker = createEmojiMarker(window.trackMap, [window.userLat, window.userLng], '📍');
+    createEmojiMarker(window.trackMap, storeLoc, '🏪');
+    trackFitPoints.push(storeLoc);
+    const custLoc = (typeof ordData?.customerLat === 'number' && typeof ordData?.customerLng === 'number')
+      ? [ordData.customerLat, ordData.customerLng]
+      : (window.userLat ? [window.userLat, window.userLng] : null);
+    if (custLoc) {
+      window.customerMarker = createEmojiMarker(window.trackMap, custLoc, '📍');
+      trackFitPoints.push(custLoc);
     }
+    // قبل الاستلام: مسار متجر -> عميل (لو الحالة فعلًا في مرحلة يبقى فيها المسار منطقي).
+    // بعد الاستلام: هيتحسب مسار مندوب -> عميل تحت في Listener الموقع نفسه (محتاج موقع مندوب
+    // حي أولًا، مش متوفر لحظة تحميل الخريطة).
+    if (custLoc && PRE_PICKUP_ROUTABLE.includes(status)) {
+      _trackRoutePhase = 'store-to-customer';
+      computeAndDrawTrackRoute(storeLoc, custLoc);
+    } else if (status === 'delivered') {
+      updateTrackEtaDisplay('delivered');
+    } else if (status === 'cancelled') {
+      updateTrackEtaDisplay('cancelled');
+    } else if (!ordData?.driverId) {
+      updateTrackEtaDisplay('no-driver');
+    }
+    fitToPoints(window.trackMap, trackFitPoints);
+
     if (trackDriverUnsub) { try { trackDriverUnsub(); } catch (e) {} trackDriverUnsub = null; }
-    if (ordData?.driverId) {
+    // جديد (Final Map QA): الطلبات المنتهية (delivered/cancelled) كانت لسه بتفتح Listener حي
+    // على موقع المندوب لو كان معيّن، رغم إن مفيش داعي نتابعه بعد انتهاء الطلب فعليًا - استهلاك
+    // Firestore Listener بلا فايدة طول ما شاشة التتبع فاضلة مفتوحة. القسم 13 (Sprint سابق)
+    // طلب صراحة "cancelled: stop unnecessary live tracking" - نفس المنطق بينطبق على delivered.
+    const isTerminal = status === 'delivered' || status === 'cancelled';
+    if (ordData?.driverId && !isTerminal) {
       trackDriverUnsub = onSnapshot(doc(db, 'users', ordData.driverId), snap => {
         const d = snap.data();
-        if (d?.lat && d?.lng) {
-          if (!window.driverMarker) {
-            window.driverMarker = createEmojiMarker(window.trackMap, [d.lat, d.lng], '🛵');
-          } else {
-            window.driverMarker.setLngLat([d.lng, d.lat]);
+        const lastSeenMs = d?.lastSeen?.toMillis ? d.lastSeen.toMillis() : null;
+        const isStale = lastSeenMs != null && (Date.now() - lastSeenMs) > DRIVER_STALE_MS;
+        if (!d?.lat || !d?.lng) return; // مفيش موقع للمندوب لسه (لسه ماحرّكش GPS) - مفيش داعي نكسر أي حاجة
+        if (isStale && POST_PICKUP_STATUSES.includes(status)) { updateTrackEtaDisplay('driver-stale'); return; }
+        const driverPos = [d.lat, d.lng];
+        if (!window.driverMarker) {
+          window.driverMarker = createEmojiMarker(window.trackMap, driverPos, '🛵');
+        } else {
+          window.driverMarker.setLngLat([d.lng, d.lat]); // تحديث نقطة موجودة - صفر Marker جديد (البند 8/9 - مفيش سرقة كاميرا)
+        }
+        // بعد الاستلام: المسار لازم يبقى مندوب -> عميل، ويتحسب تاني بس لو المندوب اتحرك
+        // مسافة فعلية (ROUTE_RECALC_METERS) - مش مع كل نبضة GPS (البند 10).
+        if (custLoc && POST_PICKUP_STATUSES.includes(status)) {
+          const phaseChanged = _trackRoutePhase !== 'driver-to-customer';
+          const movedFar = !_trackRouteLastPos ||
+            Math.hypot(driverPos[0] - _trackRouteLastPos[0], driverPos[1] - _trackRouteLastPos[1]) * 111000 >= ROUTE_RECALC_METERS;
+          if (phaseChanged || movedFar) {
+            _trackRoutePhase = 'driver-to-customer';
+            _trackRouteLastPos = driverPos;
+            if (phaseChanged) removeRoute(window.trackMap, 'track-route'); // مسار المرحلة القديمة (متجر->عميل) يتشال قبل ما نرسم الجديد
+            computeAndDrawTrackRoute(driverPos, custLoc);
           }
         }
       });
     }
   });
+}
+// جديد: زرار "توسيط" على خريطة تتبع الطلب - بيرجّع كل النقط المعروضة (متجر/عميل/مسار) في
+// مجال النظر تاني، مفيد لو العميل زوّم/سحب الخريطة يدوي وعايز يرجعلها.
+export function recenterTrackMap() {
+  if (!window.trackMap || !trackFitPoints.length) return;
+  fitToPoints(window.trackMap, trackFitPoints);
 }
 
 // =====================================================================================

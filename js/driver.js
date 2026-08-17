@@ -9,16 +9,35 @@ import { updateDriverLocationForActiveRide, initDriverActiveRideListener } from 
 import { listenExternalOffers, initDriverActiveExternalListener } from './external.js';
 
 // ===== GPS / LOCATION =====
+// جديد (Map Professionalization Sprint): معالجة أخطاء GPS كانت فاضية تمامًا (()=>{}) - يعني
+// لو العميل رفض صلاحية الموقع، أو الجهاز مفيهوش GPS، أو حصل Timeout، مفيش أي رسالة توضح ليه
+// الموقع ماتحددش. دلوقتي كل حالة بتوريله رسالة واضحة (بدون ما نكسر أي سلوك تاني - getLocation
+// لسه بترجع بصمت في حالة عدم دعم المتصفح، زي ما كانت بالظبط).
+function _gpsErrorMessage(err) {
+  if (!err) return 'تعذر تحديد موقعك';
+  switch (err.code) {
+    case err.PERMISSION_DENIED: return '📍 تم رفض إذن الموقع - فعّله من إعدادات المتصفح';
+    case err.POSITION_UNAVAILABLE: return '📍 تعذر تحديد موقعك حاليًا، حاول مرة أخرى';
+    case err.TIMEOUT: return '📍 استغرق تحديد الموقع وقتًا طويلًا، حاول مرة أخرى';
+    default: return 'تعذر تحديد موقعك';
+  }
+}
 export function getLocation() {
-  if (!navigator.geolocation) return;
+  if (!navigator.geolocation) { showToast('المتصفح مايدعمش تحديد الموقع', 'err'); return; }
+  // جديد (Sprint 3.7 - البند 16، حالة LOCATING): كانت الشاشة بتفضل من غير أي مؤشر لحد ما
+  // النتيجة (نجاح/فشل) توصل - ممكن ياخد ثواني على شبكة بطيئة، فالمستخدم مايعرفش هل ضغطته
+  // اتسجلت أصلًا. Toast بسيطة بس، مفيش تعقيد إضافي.
+  showToast('📍 جاري تحديد موقعك...', '');
   navigator.geolocation.getCurrentPosition(pos => {
-    const {latitude:lat, longitude:lng} = pos.coords;
+    const {latitude:lat, longitude:lng, accuracy} = pos.coords;
     window.userLat = lat; window.userLng = lng;
-    showToast('📍 تم تحديد موقعك','ok');
+    // دقة ضعيفة جدًا (>200 متر) - نستخدم الموقع برضه (أفضل من مفيش حاجة) بس نوضح للمستخدم
+    // إنها مش دقيقة عشان يقدر يصححها يدويًا لو محتاج (بدل ما نوهمه إنها دقة عالية)
+    showToast(accuracy && accuracy > 200 ? '📍 تم تحديد موقعك تقريبيًا (دقة ضعيفة)' : '📍 تم تحديد موقعك', 'ok');
     if (window.CU && window.CUD?.role === 'customer') {
       updateDoc(doc(db,'users',window.CU.uid), {lat, lng}).catch(()=>{});
     }
-  }, ()=>{});
+  }, err => { showToast(_gpsErrorMessage(err), 'err'); }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 });
 }
 
 // جديد: تحديث الموقع كان بيكتب على Firestore مع كل نبضة GPS (ممكن كل ثانية أو أقل).
@@ -30,10 +49,28 @@ export function _distMeters(lat1,lng1,lat2,lng2){
   return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }
 export let _lastGpsWrite = 0, _lastGpsLat = null, _lastGpsLng = null;
+let _lastGpsFeedback = 0; // جديد: للـ throttle - مانعرضش Toast مع كل نبضة GPS سيئة (ممكن كل ثانية)
+function _throttledGpsFeedback(msg) {
+  const now = Date.now();
+  if (now - _lastGpsFeedback < 30000) return; // أقصى مرة كل 30 ثانية - يوصل الرسالة من غير ما يضايق المندوب
+  _lastGpsFeedback = now;
+  showToast(msg, 'err');
+}
 export function startGPS() {
   if (!navigator.geolocation || !window.CU) return;
+  // جديد: لو startGPS اتنادت قبل كده من غير ما تتقفل (مثلًا re-login من غير Page Reload)،
+  // كانت بتعمل watchPosition جديد فوق القديم من غير ما توقفه - يعني اتنين Watchers شغالين
+  // مع بعض (تسريب Battery/GPS حقيقي). دلوقتي بنوقف أي Watch قديم موجود الأول.
+  stopGPS();
   window._gpsWatch = navigator.geolocation.watchPosition(pos => {
-    const {latitude:lat, longitude:lng} = pos.coords;
+    const {latitude:lat, longitude:lng, accuracy} = pos.coords;
+    // تجاهل نبضة GPS شبه عديمة الفايدة (دقة أسوأ من 500 متر) - كتابتها هتوهم العميل/الأدمن
+    // بموقع غلط تمامًا للمندوب بدل ما ماتتحدثش الخريطة أصلًا لحد ما توصل نبضة أدق. لكن مفيش
+    // داعي نسيب المندوب من غير أي تفسير ليه الخريطة "متجمدة" - Feedback مُهدّأ (throttled).
+    if (typeof accuracy === 'number' && accuracy > 500) {
+      _throttledGpsFeedback('📡 دقة الموقع ضعيفة، جارٍ محاولة تحديد موقع أدق...');
+      return;
+    }
     window.driverLat = lat; window.driverLng = lng;
     // Phase 4B: تحريك نقطة المندوب على خريطته الشخصية (MapLibre) مع كل نبضة GPS خام - مفيش
     // كتابة Firestore هنا، بس Marker محلي (updateDriverSelfLocation بتتحقق بنفسها إن drvMap
@@ -48,7 +85,22 @@ export function startGPS() {
     // كتابة rides/{rideId}.driverLocation بتتم بس لو فيه مشوار جاري في إحدى الحالات الثلاث
     // (driver_assigned/driver_arrived/in_progress) - الفحص ده بيحصل جوه الدالة نفسها.
     updateDriverLocationForActiveRide(lat, lng);
-  }, ()=>{}, {enableHighAccuracy:true, maximumAge:10000, timeout:15000});
+  }, err => {
+    // جديد (Final Map QA - القسم 10): كانت فاضية تمامًا - لو المندوب سحب صلاحية الموقع وهو
+    // Online، كان مش هياخد أي تنبيه ليه الطلبات وقفت توصله. أهم حالة هنا PERMISSION_DENIED.
+    _throttledGpsFeedback(_gpsErrorMessage(err));
+  }, {enableHighAccuracy:true, maximumAge:10000, timeout:15000});
+}
+
+// جديد (Map Professionalization Sprint): كانت مش موجودة خالص - watchPosition() بتاعة
+// startGPS() كانت بتفضل شغالة للأبد حتى بعد تسجيل الخروج (Watcher Leak حقيقي، استهلاك
+// GPS/Battery بلا داعي، ومحاولات updateDoc على مستخدم اتسجل خروجه). دلوقتي بتتقفل صراحة من
+// registerDriverResets() تحت (بينفذ عند تسجيل الخروج عبر onListenersCleared).
+export function stopGPS() {
+  if (window._gpsWatch != null && navigator.geolocation) {
+    navigator.geolocation.clearWatch(window._gpsWatch);
+  }
+  window._gpsWatch = null;
 }
 
 
@@ -586,5 +638,6 @@ export function registerDriverResets() {
   onListenersCleared(() => {
   newOrdersUnsub = null; driverOrdersUnsub = null;
   _lastGpsWrite = 0; _lastGpsLat = null; _lastGpsLng = null;
+  stopGPS();
   });
 }
