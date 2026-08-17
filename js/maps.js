@@ -11,6 +11,81 @@ import { decodePolyline, getRoute, reverseGeocode } from './routing.js';
 // ===== OpenFreeMap Style (الـ Style الرسمي - liberty) =====
 export const OPENFREEMAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
 
+// ===== Arabic RTL Text Shaping (الحل الرسمي لـ MapLibre GL JS - Map Upgrade Sprint) =====
+// من غير الـ plugin ده، حروف العربي (والعبري) بتتعرض مفككة/بترتيب غلط على labels الخريطة.
+// ده الحل الرسمي الموثّق من MapLibre نفسه - بيتسجل مرة واحدة بس لكل الخريطة، وبيشتغل مع أي
+// خريطة يتعمل لها init بعد كده تلقائيًا. صفر قلب نصوص يدوي، صفر تعديل على أي string في المشروع.
+// lazy:true يعني الـ plugin نفسه (سكريبت خارجي صغير) يتحمّل بس أول لحظة يحتاج فيها الـ style
+// نص RTL فعلي - مفيش تكلفة تحميل إضافية لو مفيش نصوص عربي على الـ style أصلاً.
+function registerArabicRtlPlugin() {
+  try {
+    if (typeof maplibregl === 'undefined') return false;
+    if (maplibregl.getRTLTextPluginStatus && maplibregl.getRTLTextPluginStatus() !== 'unavailable') return true; // متسجل بالفعل - منع Duplicate registration
+    maplibregl.setRTLTextPlugin(
+      'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.3.0/mapbox-gl-rtl-text.js',
+      true // lazy load
+    );
+    return true;
+  } catch (e) {
+    console.error('تعذر تسجيل Arabic RTL plugin:', e);
+    return false;
+  }
+}
+// محاولة فورية وقت تحميل الموديول (المتوقع إن maplibregl يبقى متاح وقتها، زي باقي كود الملف).
+// لو لأي سبب (توقيت تحميل السكريبتات) لسه مش متاح، بنجرب تاني مرة واحدة عند اكتمال تحميل
+// الصفحة - Safety net بسيط بدون أي polling أو تكرار غير محدود.
+if (!registerArabicRtlPlugin()) {
+  window.addEventListener('load', () => registerArabicRtlPlugin(), { once: true });
+}
+
+// ===== Controls موحّدة لكل خرائط المشروع (Zoom + Compass + Scale) =====
+// دالة مركزية واحدة بدل تكرار نفس الكود في كل مكان بيتعمل فيه init لخريطة. بتتأكد إنها متتضافش
+// مرتين على نفس الـ instance (لو اتنادت غلط أكتر من مرة على نفس الخريطة - Duplicate controls).
+// المواقع (top-right / bottom-right) اتخيرت عشان متتعارضش مع زرار "توسيط"/"موقعي الحالي"
+// الموجود (.map-recenter-btn) اللي بيقعد في الزاوية السفلية المقابلة (bottom + inset-inline-end).
+function addStandardControls(map) {
+  if (!map || map._stdControlsAdded) return;
+  map._stdControlsAdded = true;
+  try {
+    map.addControl(new maplibregl.NavigationControl({ showCompass: true, showZoom: true, visualizePitch: false }), 'top-right');
+    map.addControl(new maplibregl.ScaleControl({ maxWidth: 100, unit: 'metric' }), 'bottom-right');
+  } catch (e) {
+    console.error('تعذر إضافة map controls:', e);
+  }
+}
+
+// دالة مشتركة لمعالجة أخطاء تهيئة الخريطة (Loading / Init errors) - بتعرض رسالة واضحة للمستخدم
+// بدل خريطة فاضية بصمت، من غير ما تكسر أي حاجة تانية في الصفحة.
+function attachMapErrorHandling(map, onFail) {
+  if (!map) return;
+  map.on('error', (e) => {
+    console.error('Map error:', e && e.error ? e.error : e);
+    if (typeof onFail === 'function') onFail(e);
+  });
+}
+
+// حالة تحميل الخريطة (CSS Shimmer) - بتتشال بمجرد ما الـ style/tiles توصل فعليًا (حدث 'load')،
+// عشان مستخدم Mobile يشوف حالة تحميل واضحة بدل مربع رمادي ثابت (راجع css/styles.css).
+function markMapLoaded(containerId) {
+  const el = document.getElementById(containerId);
+  if (el) el.classList.add('mv-map-loaded');
+}
+function markMapLoading(containerId) {
+  const el = document.getElementById(containerId);
+  if (el) { el.classList.remove('mv-map-loaded'); const err = el.querySelector('.mv-map-error-msg'); if (err) err.remove(); }
+}
+// رسالة خطأ واضحة مكان الخريطة (بدل ما تفضل فاضية بصمت لو فشل تحميل الـ Style/Tiles فعليًا).
+function showMapErrorMsg(containerId, text) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  el.classList.add('mv-map-loaded'); // وقف الـ shimmer
+  if (el.querySelector('.mv-map-error-msg')) return; // رسالة موجودة بالفعل - مفيش داعي نكررها
+  const msg = document.createElement('div');
+  msg.className = 'mv-map-error-msg';
+  msg.textContent = text || 'تعذر تحميل الخريطة';
+  el.appendChild(msg);
+}
+
 // ===== أدوات مشتركة =====
 // كل إحداثيات المشروع مخزّنة {lat,lng} أو [lat,lng] (نفس نظام Leaflet القديم) - MapLibre
 // بياخد [lng,lat] (GeoJSON)، فأي نقطة بتتحول هنا بس قبل ما توصل لأي MapLibre API.
@@ -97,7 +172,11 @@ export function openLocationPicker(opts = {}) {
     container: 'loc-picker-map', style: OPENFREEMAP_STYLE,
     center: toLngLat(start), zoom: 15, attributionControl: false,
   });
+  addStandardControls(locPickerMap);
+  markMapLoading('loc-picker-map');
+  attachMapErrorHandling(locPickerMap, () => showMapErrorMsg('loc-picker-map', 'تعذر تحميل الخريطة'));
   locPickerMap.on('load', () => {
+    markMapLoaded('loc-picker-map');
     setTimeout(() => { if (locPickerMap) locPickerMap.resize(); }, 50); // المودال كان display:none لحظة الإنشاء - تأكيد الأبعاد
     locPickerUpdateAddress(start[0], start[1]);
     locPickerMap.on('moveend', () => {
@@ -244,7 +323,12 @@ export function initTrackMap(ordData, status) {
     container: 'tracking-map', style: OPENFREEMAP_STYLE,
     center: toLngLat(storeLoc), zoom: 14, attributionControl: false,
   });
+  addStandardControls(window.trackMap);
+  markMapLoading('tracking-map');
+  attachMapErrorHandling(window.trackMap, () => { if (etaEl) etaEl.textContent = 'تعذر تحميل الخريطة'; showMapErrorMsg('tracking-map', 'تعذر تحميل الخريطة'); });
   window.trackMap.on('load', () => {
+    markMapLoaded('tracking-map');
+    if (window.trackMap) window.trackMap.resize(); // تأكيد الأبعاد لو الحاوية كانت لسه بتتحرك/Layout بيستقر
     createEmojiMarker(window.trackMap, storeLoc, '🏪');
     trackFitPoints.push(storeLoc);
     const custLoc = (typeof ordData?.customerLat === 'number' && typeof ordData?.customerLng === 'number')
@@ -323,22 +407,64 @@ let driverMapRideData = null; // لو موجودة، يبقى فيه مشوار 
 
 export function toggleDriverMap() {
   const sec = document.getElementById('drv-map-sec');
-  const show = sec.style.display === 'none';
+  if (!sec) return;
+  // إصلاح (Map Upgrade Sprint - المشكلة رقم 1): زرار "خريطة" في الشريط السفلي كان مش بينده
+  // drvNav() زي باقي الأزرار، فلو المندوب كان في تبويب "إحصائيات"/"حسابي" وقت الضغط، قسم
+  // الخريطة (#drv-map-sec) كان بيتفتح فعليًا (display:block) لكن جوه #drv-home-tab اللي هو نفسه
+  // مخفي (display:none) - يعني الخريطة "شغالة" بس مش ظاهرة للمستخدم خالص. هنا بنتأكد إن تبويب
+  // الرئيسية ظاهر أولًا (بنفس منطق drvNav في driver.js بالظبط، من غير ما نعدّل driver.js نفسه).
+  const homeTab = document.getElementById('drv-home-tab');
+  const homeWasHidden = homeTab && homeTab.style.display === 'none';
+  if (homeWasHidden) {
+    document.querySelectorAll('#screen-driver .nav-item').forEach(n => n.classList.remove('active'));
+    homeTab.style.display = 'block';
+    const statsTab = document.getElementById('drv-stats-tab');
+    const profTab = document.getElementById('drv-profile-tab');
+    const extra = document.getElementById('drv-extra');
+    if (statsTab) statsTab.style.display = 'none';
+    if (profTab) profTab.style.display = 'none';
+    if (extra) extra.style.display = 'grid';
+    const mapNavBtn = document.querySelector('#screen-driver .bottom-nav .nav-item:last-child');
+    if (mapNavBtn) mapNavBtn.classList.add('active');
+  }
+  const show = homeWasHidden || sec.style.display === 'none';
   sec.style.display = show ? 'block' : 'none';
-  if (show && !window.drvMap && typeof maplibregl !== 'undefined') {
+  if (!show) return; // كان ظاهر بالفعل والمستخدم بيقفله - مفيش داعي نبني/نـresize خريطة هتتخبي
+
+  if (!window.drvMap) {
+    if (typeof maplibregl === 'undefined') { showToast('تعذر تحميل الخريطة، حاول لاحقًا', 'err'); return; }
     setTimeout(() => {
-      window.drvMap = new maplibregl.Map({
-        container: 'driver-map', style: OPENFREEMAP_STYLE,
-        center: toLngLat(DEFAULT_LOC), zoom: 14, attributionControl: false,
-      });
-      drvSelfMarker = null; drvPickupMarker = null;
-      window.drvMap.on('load', () => {
-        if (typeof window.driverLat === 'number' && typeof window.driverLng === 'number') {
-          drvSelfMarker = createEmojiMarker(window.drvMap, [window.driverLat, window.driverLng], '🛵');
-        }
-        if (driverMapRideData) applyDriverMapRideMode(driverMapRideData);
-      });
+      try {
+        // استخدام موقع GPS الحقيقي للمندوب لو متاح فعلاً وقت فتح الخريطة، وإلا DEFAULT_LOC
+        // (المنايف - الإسماعيلية) كـ fallback - نفس المتغيرات المستخدمة بالفعل في driver.js.
+        const startLoc = (typeof window.driverLat === 'number' && typeof window.driverLng === 'number')
+          ? [window.driverLat, window.driverLng] : DEFAULT_LOC;
+        window.drvMap = new maplibregl.Map({
+          container: 'driver-map', style: OPENFREEMAP_STYLE,
+          center: toLngLat(startLoc), zoom: 14, attributionControl: false,
+        });
+        addStandardControls(window.drvMap);
+        markMapLoading('driver-map');
+        attachMapErrorHandling(window.drvMap, () => { showToast('تعذر تحميل خريطة المندوب', 'err'); showMapErrorMsg('driver-map', 'تعذر تحميل الخريطة'); });
+        drvSelfMarker = null; drvPickupMarker = null;
+        window.drvMap.on('load', () => {
+          markMapLoaded('driver-map');
+          if (typeof window.driverLat === 'number' && typeof window.driverLng === 'number') {
+            drvSelfMarker = createEmojiMarker(window.drvMap, [window.driverLat, window.driverLng], '🛵');
+          }
+          if (driverMapRideData) applyDriverMapRideMode(driverMapRideData);
+          if (window.drvMap) window.drvMap.resize(); // تأكيد الأبعاد فور التحميل - منع Canvas رمادي/فاضي
+        });
+      } catch (err) {
+        console.error('تعذر تهيئة خريطة المندوب:', err);
+        showToast('تعذر تحميل الخريطة، حاول لاحقًا', 'err');
+      }
     }, 100);
+  } else {
+    // الخريطة كانت متبنية بالفعل بس الحاوية كانت مخفية (display:none على القسم أو التبويب) -
+    // MapLibre محتاج resize() صريح عشان يعيد حساب أبعاد الـ Canvas الصحيحة، وإلا هتفضل خريطة
+    // رمادية/فاضية أو مقصوصة لحد ما المستخدم يعمل Zoom/Pan يدوي (البند الأساسي في المشكلة رقم 1).
+    setTimeout(() => { if (window.drvMap) window.drvMap.resize(); }, 60);
   }
 }
 
@@ -386,7 +512,12 @@ export function initAdminMap(drivers = [], rides = []) {
       container: 'admin-map', style: OPENFREEMAP_STYLE,
       center: toLngLat(DEFAULT_LOC), zoom: 13, attributionControl: true,
     });
+    addStandardControls(window.admMap);
+    markMapLoading('admin-map');
+    attachMapErrorHandling(window.admMap, () => { showToast('تعذر تحميل خريطة الأدمن', 'err'); showMapErrorMsg('admin-map', 'تعذر تحميل الخريطة'); });
     window.admMap.on('load', () => {
+      markMapLoaded('admin-map');
+      window.admMap.resize();
       drivers.forEach(d => {
         if (typeof d.lat === 'number' && typeof d.lng === 'number') createEmojiMarker(window.admMap, [d.lat, d.lng], '🛵');
       });
@@ -417,8 +548,13 @@ export function initRideStatusMap(rideData) {
     container: 'ride-status-map', style: OPENFREEMAP_STYLE,
     center: toLngLat(rideData.pickup), zoom: 13, attributionControl: false,
   });
+  addStandardControls(rsMap);
+  markMapLoading('ride-status-map');
+  attachMapErrorHandling(rsMap, () => { showToast('تعذر تحميل خريطة المشوار', 'err'); showMapErrorMsg('ride-status-map', 'تعذر تحميل الخريطة'); });
   rsMap.on('load', () => {
     if (!rsMap) return; // ممكن اتشالت قبل ما الـ load event يحصل (تغيير سريع للشاشة)
+    markMapLoaded('ride-status-map');
+    rsMap.resize();
     createEmojiMarker(rsMap, rideData.pickup, '🟢');
     if (rideData.dropoff) createEmojiMarker(rsMap, rideData.dropoff, '🔴');
     if (rideData.routeGeometry) drawEncodedRoute(rsMap, rideData.routeGeometry, 'rs-route');
@@ -446,7 +582,10 @@ export function initDriverRegLocationMap(lat, lng) {
     container: 'loc-map', style: OPENFREEMAP_STYLE,
     center: [lng, lat], zoom: 16, attributionControl: false,
   });
-  window._locMap.on('load', () => { createEmojiMarker(window._locMap, [lat, lng], '📍'); });
+  addStandardControls(window._locMap);
+  markMapLoading('loc-map');
+  attachMapErrorHandling(window._locMap, () => showMapErrorMsg('loc-map', 'تعذر تحميل الخريطة'));
+  window._locMap.on('load', () => { markMapLoaded('loc-map'); window._locMap.resize(); createEmojiMarker(window._locMap, [lat, lng], '📍'); });
 }
 
 // ===== تصفير أعلام المتابعة عند تسجيل الخروج (بيتنفذ من utils.js عبر clearAllListeners) =====
