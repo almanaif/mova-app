@@ -103,7 +103,7 @@
   <div class="jm-hdr"><h1>بيانات متجرك</h1><p>كمّل بيانات متجرك عشان تقدر تستقبل الطلبات على MOVA</p></div>
   <div class="jm-body">
     <div class="jm-sec"><h3>بيانات المتجر</h3><div class="inp-g"><label>اسم المتجر</label><input type="text" id="cm-store-name" class="inp" placeholder="سوبرماركت المنايف"></div><div class="inp-g"><label>رقم تليفون المتجر</label><input type="tel" id="cm-store-phone" class="inp" placeholder="01xxxxxxxxx"></div></div>
-    <div class="jm-sec"><h3>تصنيف المتجر</h3><div class="cat-grid"><div class="cat-g-btn cat-g-btn2" onclick="selCMCat(this)"><span class="ic">🛒</span>بقالة</div><div class="cat-g-btn cat-g-btn2" onclick="selCMCat(this)"><span class="ic">🍽️</span>مطعم</div><div class="cat-g-btn cat-g-btn2" onclick="selCMCat(this)"><span class="ic">💊</span>صيدلية</div></div></div>
+    <div class="jm-sec"><h3>تصنيف المتجر</h3><div class="cat-grid"><div class="cat-g-btn cat-g-btn2" onclick="selCMCat(this)"><span class="ic" data-icon="shopping-cart" data-size="20"></span>بقالة</div><div class="cat-g-btn cat-g-btn2" onclick="selCMCat(this)"><span class="ic" data-icon="utensils" data-size="20"></span>مطعم</div><div class="cat-g-btn cat-g-btn2" onclick="selCMCat(this)"><span class="ic" data-icon="pill" data-size="20"></span>صيدلية</div></div></div>
     <button class="btn-ac" id="cm-submit-btn" onclick="submitMerchantProfile()">حفظ ومتابعة</button>
     <p style="text-align:center;margin-top:14px;font-size:13px"><a href="javascript:void(0)" onclick="doLogout()" style="color:var(--mu);text-decoration:underline">تسجيل خروج</a></p>
   </div>
@@ -192,7 +192,10 @@
 <!-- ===== CUSTOMER SCREEN ===== -->
 <div id="screen-customer" class="screen">
   <div class="app-header">
-    <div class="hdr-loc" onclick="getLocation()"><small>📍 الموقع</small><strong>المنايف، أبو صوير - الإسماعيلية</strong></div>
+    <div class="hdr-main">
+      <p class="hdr-greet" id="hdr-greet">أهلاً بيك</p>
+      <div class="hdr-loc" onclick="openCustomerLocationPicker()"><span data-icon="map-pin" data-size="14"></span><strong>المنايف، أبو صوير - الإسماعيلية</strong></div>
+    </div>
     <div class="hdr-acts">
       <button class="icon-btn" onclick="openNotifs()"><span data-icon="bell" data-size="20"></span><span class="badge" id="notif-c">0</span></button>
       <button class="icon-btn" onclick="openCart()"><span data-icon="shopping-cart" data-size="20"></span><span class="badge" id="cart-b">0</span></button>
@@ -200,14 +203,14 @@
   </div>
 
   <div id="tab-home">
-    <div class="search-wrap"><div class="search-inner">🔍<input type="text" placeholder="ابحث عن منتج أو متجر..." oninput="doSearch(this.value)"></div></div>
+    <div class="search-wrap"><div class="search-inner"><span data-icon="search" data-size="17"></span><input type="text" placeholder="ابحث عن منتج أو متجر..." oninput="doSearch(this.value)"></div></div>
     <div id="search-results"></div>
     <div class="cats-sec">
       <div class="cats-scroll" id="cats-scroll"></div>
     </div>
     <div class="banner-sec" id="banner-sec"><div class="bscroll" id="banner-scroll"></div></div>
     <div class="pts-bar" onclick="custNav('rewards',document.querySelectorAll('#screen-customer .nav-item')[2])">
-      <div class="pts-ic">⭐</div>
+      <div class="pts-ic"><span data-icon="star" data-size="22"></span></div>
       <div class="pts-info"><h3>نقاط الولاء</h3><p>كل 10 جنيه = نقطة واحدة</p></div>
       <div class="pts-count"><span class="pts-num" id="user-pts">0</span><small>نقطة</small></div>
     </div>
@@ -215,38 +218,40 @@
       <div class="sec-hdr"><span class="sec-title">عروض حصرية</span></div>
       <div class="off-scroll" id="off-scroll"></div>
     </div>
-    <button class="anyreq-btn" onclick="openAnyReq()"><div class="ar-ic">📋</div><div class="ar-info"><h3>لديك طلب؟ اطلبه</h3><p>أخبرنا بأي منتج محتاجه وهنجيبهولك</p></div></button>
-    <button class="anyreq-btn" onclick="openRideRequest()"><div class="ar-ic">🛵</div><div class="ar-info"><h3>اطلب مشوار</h3><p>حدد نقطة الانطلاق والوصول واعرف السعر فورًا</p></div></button>
+    <div class="services-row">
+      <button class="service-card service-card--accent" onclick="openAnyReq()"><div class="sc-ic"><span data-icon="package" data-size="20"></span></div><div class="sc-title">لديك طلب؟ اطلبه</div><div class="sc-desc">أخبرنا بأي منتج محتاجه</div></button>
+      <button class="service-card service-card--primary" onclick="openRideRequest()"><div class="sc-ic"><span data-icon="bike" data-size="20"></span></div><div class="sc-title">اطلب مشوار</div><div class="sc-desc">حدد نقطتك واعرف السعر فورًا</div></button>
+    </div>
     <div class="stores-sec">
       <div class="sec-hdr"><span class="sec-title">المتاجر</span></div>
       <div id="stores-list"></div>
     </div>
   </div>
 
-  <div id="tab-orders" style="display:none;padding:12px 14px">
-    <h2 style="font-size:18px;font-weight:900;margin-bottom:12px">طلباتي</h2>
+  <div id="tab-orders" style="display:none;padding:var(--space-3) 14px">
+    <h2 class="t-page-title" style="margin-bottom:var(--space-3)">طلباتي</h2>
     <div id="orders-list" class="orders-list-el"></div>
   </div>
 
-  <div id="tab-rewards" style="display:none;padding:12px 14px">
-    <div class="pts-card"><div><div class="pl">نقاط الولاء</div><div class="pv" id="pts-big">0</div></div><div style="font-size:38px">⭐</div></div>
-    <p style="font-size:12px;color:var(--mu);margin-bottom:12px">كل 10 جنيه = نقطة واحدة</p>
+  <div id="tab-rewards" style="display:none;padding:var(--space-3) 14px">
+    <div class="pts-card"><div><div class="pl">نقاط الولاء</div><div class="pv" id="pts-big">0</div></div><div style="color:#fff"><span data-icon="star" data-size="34"></span></div></div>
+    <p class="t-caption" style="margin-bottom:var(--space-3)">كل 10 جنيه = نقطة واحدة</p>
     <div id="orders-list-rewards" class="orders-list-el"></div>
   </div>
 
   <div id="tab-profile" style="display:none">
     <div class="profile-page">
       <div class="acc-card">
-        <div class="profile-av2" id="cust-av">👤</div>
+        <div class="profile-av2" id="cust-av"><span data-icon="user" data-size="26"></span></div>
         <div class="acc-info">
           <h3 id="cust-name">--</h3>
-          <div class="acc-line" id="cust-phone-line" style="display:none">📞 <span id="cust-phone"></span></div>
-          <div class="acc-line" id="cust-address-line" style="display:none">📍 <span id="cust-address"></span></div>
+          <div class="acc-line" id="cust-phone-line" style="display:none"><span data-icon="phone" data-size="13"></span> <span id="cust-phone"></span></div>
+          <div class="acc-line" id="cust-address-line" style="display:none"><span data-icon="map-pin" data-size="13"></span> <span id="cust-address"></span></div>
         </div>
       </div>
       <div class="acc-stats-row">
-        <div class="acc-stat"><div class="acc-stat-v" id="acc-ord-count">--</div><div class="acc-stat-l">📦 طلباتي</div></div>
-        <div class="acc-stat"><div class="acc-stat-v" id="pts-prof">0</div><div class="acc-stat-l">⭐ نقاط الولاء</div></div>
+        <div class="acc-stat"><div class="acc-stat-v" id="acc-ord-count">--</div><div class="acc-stat-l"><span data-icon="package" data-size="12"></span> طلباتي</div></div>
+        <div class="acc-stat"><div class="acc-stat-v" id="pts-prof">0</div><div class="acc-stat-l"><span data-icon="star" data-size="12"></span> نقاط الولاء</div></div>
       </div>
       <div class="menu-list">
         <button class="menu-item" onclick="custNav('orders',document.querySelectorAll('#screen-customer .nav-item')[1])"><div class="mi-ic"><span data-icon="package" data-size="18"></span></div><div class="mi-text"><strong>طلباتي</strong><small>تتبع طلباتك</small></div><span class="mi-arr" data-icon="chevron-left" data-size="16"></span></button>
@@ -267,50 +272,52 @@
 <!-- ===== STORE DETAIL ===== -->
 <div id="screen-store" class="screen">
   <div class="store-hero">
-    <div class="store-hero-img" style="background:linear-gradient(135deg,#1A1A2E,#0F3460)">🏪</div>
-    <button class="hero-back" onclick="showScreen('screen-customer')">→</button>
-    <div class="hero-info"><h2 id="store-detail-name">متجر</h2><div class="hero-meta"><span>📦 توصيل متاح</span></div><div class="hero-acts"><button class="ha-btn ha-call" onclick="callCurrentStore()">📞 اتصل</button><button class="ha-btn ha-wa" onclick="waCurrentStore()">💬 واتساب</button></div></div>
+    <div class="store-hero-img" style="background:linear-gradient(135deg,#1A1A2E,#0F3460)"><span data-icon="store" data-size="44"></span></div>
+    <button class="hero-back" onclick="showScreen('screen-customer')"><span data-icon="arrow-right" data-size="18"></span></button>
+    <div class="hero-info"><h2 id="store-detail-name">متجر</h2><div class="hero-meta"><span><span data-icon="package" data-size="13"></span> توصيل متاح</span></div><div class="hero-acts"><button class="ha-btn ha-call" onclick="callCurrentStore()"><span data-icon="phone" data-size="14"></span> اتصل</button><button class="ha-btn ha-wa" onclick="waCurrentStore()"><span data-icon="message-circle" data-size="14"></span> واتساب</button></div></div>
   </div>
   <div class="pc-bar"><div class="pc-scroll" id="pc-scroll"><button class="pc-btn active" onclick="filterProds('all',this)">الكل</button></div></div>
   <div class="prods-sec" id="prods-section"></div>
-  <div class="cart-bar-fixed" id="cart-bar-store"><button onclick="openCart()"><span>🛒 <span id="cart-count-s">0</span> عناصر</span><span><span id="cart-total-s">0</span> ج</span></button></div>
+  <div class="cart-bar-fixed" id="cart-bar-store"><button onclick="openCart()"><span><span data-icon="shopping-cart" data-size="16"></span> <span id="cart-count-s">0</span> عناصر</span><span><span id="cart-total-s">0</span> ج</span></button></div>
 </div>
 
 <!-- ===== CART ===== -->
 <div id="screen-cart" class="screen">
   <div class="track-hero" style="display:flex;align-items:center;gap:12px">
-    <button onclick="showScreen(window.cartReturnScreen||'screen-customer')" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:34px;height:34px;border-radius:50%;font-size:16px;cursor:pointer;flex-shrink:0">→</button>
+    <button onclick="showScreen(window.cartReturnScreen||'screen-customer')" class="page-header__back" style="background:rgba(255,255,255,.15);color:#fff;flex-shrink:0"><span data-icon="arrow-right" data-size="18"></span></button>
     <div><h2>سلة المشتريات</h2><p id="cart-item-count-lbl">السلة فارغة</p></div>
   </div>
   <div id="cart-items-list" style="padding:14px;padding-bottom:90px"></div>
-  <div class="cart-bar-fixed" id="cart-bar-screen"><button onclick="goCheckout()"><span>✅ إتمام الطلب</span><span><span id="cart-total-full">0</span> ج</span></button></div>
+  <div class="cart-bar-fixed" id="cart-bar-screen"><button onclick="goCheckout()"><span><span data-icon="check-circle" data-size="16"></span> إتمام الطلب</span><span><span id="cart-total-full">0</span> ج</span></button></div>
 </div>
 
 <!-- ===== ORDER TRACKING ===== -->
 <div id="screen-track" class="screen">
   <div class="track-hero"><h2>تتبع طلبك</h2><p>آخر تحديث</p><span class="track-id" id="track-order-id">#XXXXXX</span></div>
   <div class="track-steps-outer"><h3>حالة الطلب</h3><div class="track-timeline" id="track-timeline"></div></div>
-  <div class="map-wrap"><div id="tracking-map"></div></div>
+  <div class="map-wrap"><div id="tracking-map"></div><button class="map-recenter-btn" onclick="recenterTrackMap()" aria-label="توسيط الخريطة" data-icon="map-pin" data-size="18"></button></div>
   <div class="map-card"><h3>تفاصيل الطلب</h3>
     <div class="map-info-row"><span class="lbl">المندوب</span><span class="val" id="track-driver">بانتظار المندوب...</span></div>
     <div id="track-driver-contact" style="display:none;gap:8px;margin:4px 0 8px"></div>
     <div class="map-info-row"><span class="lbl">وقت التوصيل</span><span class="val" id="track-eta">15-25 دقيقة</span></div>
+    <div class="map-info-row"><span class="lbl">المسافة</span><span class="val" id="track-distance">--</span></div>
     <div class="map-info-row"><span class="lbl">الإجمالي</span><span class="val" id="track-total">0 ج</span></div>
   </div>
   <div class="rating-prompt" id="rating-section" style="display:none">
     <h3>قيّم تجربتك</h3><p>ساعدنا نحسّن الخدمة</p>
-    <div class="stars-row"><span class="star" onclick="setStar(1)">⭐</span><span class="star" onclick="setStar(2)">⭐</span><span class="star" onclick="setStar(3)">⭐</span><span class="star" onclick="setStar(4)">⭐</span><span class="star" onclick="setStar(5)">⭐</span></div>
-    <div class="rating-target"><div class="rt-card active" id="rt-store" onclick="selectRatingTarget('store')"><span class="ri">🏪</span><strong>المتجر</strong></div><div class="rt-card" id="rt-driver" onclick="selectRatingTarget('driver')"><span class="ri">🛵</span><strong>المندوب</strong></div></div>
+    <div class="stars-row"><span class="star" onclick="setStar(1)" data-icon="star" data-size="30"></span><span class="star" onclick="setStar(2)" data-icon="star" data-size="30"></span><span class="star" onclick="setStar(3)" data-icon="star" data-size="30"></span><span class="star" onclick="setStar(4)" data-icon="star" data-size="30"></span><span class="star" onclick="setStar(5)" data-icon="star" data-size="30"></span></div>
+    <div class="rating-target"><div class="rt-card active" id="rt-store" onclick="selectRatingTarget('store')"><span class="ri" data-icon="store" data-size="22"></span><strong>المتجر</strong></div><div class="rt-card" id="rt-driver" onclick="selectRatingTarget('driver')"><span class="ri" data-icon="bike" data-size="22"></span><strong>المندوب</strong></div></div>
     <textarea id="rating-comment" class="inp" rows="2" placeholder="اكتب تعليقك (اختياري)" style="margin-bottom:12px;resize:none"></textarea>
     <button class="btn-p" onclick="submitRating()">إرسال التقييم</button>
   </div>
+  <div id="track-cancel-box" style="display:none;padding:14px 14px 0"></div>
   <div style="padding:14px"><button class="btn-p" onclick="showScreen('screen-customer')" style="background:var(--s)">رجوع للرئيسية</button></div>
 </div>
 
 <!-- ===== RIDE REQUEST (Phase 3A) ===== -->
 <div id="screen-ride-request" class="screen">
   <div class="track-hero" style="display:flex;align-items:center;gap:12px">
-    <button onclick="showScreen('screen-customer')" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:34px;height:34px;border-radius:50%;font-size:16px;cursor:pointer;flex-shrink:0">→</button>
+    <button onclick="showScreen('screen-customer')" class="page-header__back" style="background:rgba(255,255,255,.15);color:#fff;flex-shrink:0"><span data-icon="arrow-right" data-size="18"></span></button>
     <div><h2>اطلب مشوار</h2><p id="rr-step-label">اضغط على الخريطة لتحديد نقطة الانطلاق</p></div>
   </div>
   <div class="map-wrap"><div id="ride-request-map"></div></div>
@@ -339,7 +346,7 @@
 <!-- ===== RIDE STATUS (Phase 3B: Recovery + Phase 4B: خريطة حية + Route + ETA) ===== -->
 <div id="screen-ride-status" class="screen">
   <div class="track-hero" style="display:flex;align-items:center;gap:12px">
-    <button onclick="showScreen('screen-customer')" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:34px;height:34px;border-radius:50%;font-size:16px;cursor:pointer;flex-shrink:0">→</button>
+    <button onclick="showScreen('screen-customer')" class="page-header__back" style="background:rgba(255,255,255,.15);color:#fff;flex-shrink:0"><span data-icon="arrow-right" data-size="18"></span></button>
     <div><h2>حالة المشوار</h2><p id="rs-status-label">جاري البحث عن سائق...</p></div>
   </div>
   <div class="map-wrap" id="rs-map-wrap" style="display:none"><div id="ride-status-map"></div></div>
@@ -355,7 +362,7 @@
 <!-- ===== EXTERNAL PURCHASE STATUS (Phase 3B - "لديك طلب؟ اطلبه") ===== -->
 <div id="screen-ep-status" class="screen">
   <div class="track-hero" style="display:flex;align-items:center;gap:12px">
-    <button onclick="epCloseStatus();showScreen('screen-customer')" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:34px;height:34px;border-radius:50%;font-size:16px;cursor:pointer;flex-shrink:0">→</button>
+    <button onclick="epCloseStatus();showScreen('screen-customer')" class="page-header__back" style="background:rgba(255,255,255,.15);color:#fff;flex-shrink:0"><span data-icon="arrow-right" data-size="18"></span></button>
     <div><h2>حالة طلب الشراء</h2><p id="ep-status-label">جاري البحث عن كابتن...</p></div>
   </div>
   <div class="map-card">
@@ -474,6 +481,30 @@
   </div>
 </div>
 
+<!-- ===== LOCATION PICKER MODAL (Map Sprint - عميل وتاجر بيستخدموا نفس الشاشة) =====
+     Fixed-center-pin UX: الخريطة بتتحرك تحت دبوس ثابت في النص - بدل ما ندرّج Marker فعلي
+     (أبسط وأكثر موثوقية عبر المتصفحات من Draggable Marker API، ونفس النمط المستخدم في تطبيقات
+     التوصيل المعروفة). onclick="if(event.target===this)..." هنا اتعمد استبعادها عشان تأكيد/
+     إلغاء اختيار الموقع فعل مقصود لازم زرار واضح، مش قفل بالغلط لمس برة الخريطة. -->
+<div class="modal-overlay" id="loc-picker-modal">
+  <div class="modal-sheet" style="padding:0;max-height:92vh">
+    <div class="modal-handle" style="margin:10px auto 0"></div>
+    <div class="modal-title" style="padding:8px var(--space-5) 0">📍 <span id="loc-picker-title">تحديد موقع التسليم</span></div>
+    <div class="loc-picker-map-wrap">
+      <div id="loc-picker-map"></div>
+      <div class="loc-picker-pin">📍</div>
+      <button class="map-recenter-btn" onclick="locPickerUseCurrent()" aria-label="استخدام موقعي الحالي" data-icon="map-pin" data-size="18"></button>
+    </div>
+    <div style="padding:10px var(--space-5) var(--space-5)">
+      <div class="loc-picker-addr" id="loc-picker-addr">حرّك الخريطة لاختيار الموقع</div>
+      <div class="modal-acts" style="margin-top:10px">
+        <button class="btn-outline" onclick="closeLocationPicker()">إلغاء</button>
+        <button class="btn-p" style="flex:1;width:auto" onclick="locPickerConfirm()">✅ تأكيد الموقع</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ===== IMAGE ZOOM ===== -->
 <div class="zoom-ov" id="zoom-ov"><button class="zc" onclick="closeZoom()"><span data-icon="x" data-size="18"></span></button><img id="zoom-img" src=""></div>
 
@@ -576,7 +607,19 @@
 
 <!-- ===== MERCHANT APP ===== -->
 <div id="screen-merchant" class="screen">
-  <div class="merch-hdr"><h1 id="merch-name">متجرك</h1><p>لوحة التحكم - إدارة متجرك</p></div>
+  <div class="merch-hdr" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+    <div><h1 id="merch-name">متجرك</h1><p>لوحة التحكم - إدارة متجرك</p></div>
+    <button class="icon-btn" onclick="openNotifs()" style="color:#fff;background:rgba(255,255,255,.15);flex-shrink:0"><span data-icon="bell" data-size="20"></span><span class="badge" id="merch-notif-c">0</span></button>
+  </div>
+  <!-- جديد (Map Sprint - القسم 3/12): زرار موقع المتجر - مفيش قبل كده أي طريقة للتاجر يسجل
+       بيها إحداثيات متجره الحقيقية؛ كل الطلبات كانت بترسم المتجر على نقطة ثابتة واحدة. -->
+  <div style="padding:0 14px 10px">
+    <button class="menu-item" style="width:100%" onclick="openMerchantLocationPicker()">
+      <div class="mi-ic"><span data-icon="map-pin" data-size="18"></span></div>
+      <div class="mi-text"><strong>موقع المتجر</strong><small id="merch-loc-status">لم يتم تحديد الموقع بعد</small></div>
+      <span class="mi-arr" data-icon="chevron-left" data-size="16"></span>
+    </button>
+  </div>
   <div class="merch-stats">
     <div class="ms-c"><div class="mv" id="m-today-ords">0</div><div class="ml">طلبات اليوم</div></div>
     <div class="ms-c"><div class="mv" id="m-today-rev">0 ج</div><div class="ml">إيرادات اليوم</div></div>
@@ -764,12 +807,12 @@
 <div class="modal-overlay" id="any-req-modal" onclick="if(event.target===this)closeModal('any-req-modal')">
   <div class="modal-sheet">
     <div class="modal-handle"></div>
-    <div class="modal-title">📋 اطلب أي حاجة</div>
+    <div class="modal-title" style="gap:8px"><span data-icon="package" data-size="18"></span> اطلب أي حاجة</div>
     <p style="font-size:13px;color:var(--mu);margin-bottom:12px">اكتب اللي محتاجه وإحنا هنجيبهولك من أي مكان</p>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
-      <button class="mb2 mb-view" onclick="quickReq('محتاج 2 كيلو فراخ')">🐔 فراخ</button>
-      <button class="mb2 mb-view" onclick="quickReq('محتاج روشتة أدوية')">💊 أدوية</button>
-      <button class="mb2 mb-view" onclick="quickReq('محتاج خبز وسمن')">🍞 خبز</button>
+      <button class="mb2 mb-view" onclick="quickReq('محتاج 2 كيلو فراخ')"><span data-icon="utensils" data-size="14"></span> فراخ</button>
+      <button class="mb2 mb-view" onclick="quickReq('محتاج روشتة أدوية')"><span data-icon="pill" data-size="14"></span> أدوية</button>
+      <button class="mb2 mb-view" onclick="quickReq('محتاج خبز وسمن')"><span data-icon="package" data-size="14"></span> خبز</button>
     </div>
     <div class="inp-g"><label>اسم المكان</label><input type="text" id="ep-place-name" class="inp" placeholder="مثلاً: صيدلية العزبي، سوبر ماركت..."></div>
     <textarea id="any-req-txt" class="inp" rows="3" placeholder="اكتب طلبك هنا..." style="margin-bottom:8px;resize:none"></textarea>
@@ -795,7 +838,7 @@
   <div class="jm-hdr"><h1>انضم كتاجر</h1><p>أضف متجرك على منصة MOVA وابدأ تستقبل الطلبات</p></div>
   <div class="jm-body">
     <div class="jm-sec"><h3>بيانات المتجر</h3><div class="inp-g"><label>اسم المتجر</label><input type="text" id="jm-name" class="inp" placeholder="سوبرماركت المنايف"></div><div class="inp-g"><label>رقم التليفون</label><input type="tel" id="jm-phone" class="inp" placeholder="01xxxxxxxxx"></div><div class="inp-g"><label>العنوان</label><input type="text" id="jm-addr" class="inp" placeholder="شارع الجمهورية"></div></div>
-    <div class="jm-sec"><h3>تصنيف المتجر</h3><div class="cat-grid"><div class="cat-g-btn" onclick="selMCat(this)"><span class="ic">🛒</span>بقالة</div><div class="cat-g-btn" onclick="selMCat(this)"><span class="ic">🍽️</span>مطعم</div><div class="cat-g-btn" onclick="selMCat(this)"><span class="ic">💊</span>صيدلية</div></div></div>
+    <div class="jm-sec"><h3>تصنيف المتجر</h3><div class="cat-grid"><div class="cat-g-btn" onclick="selMCat(this)"><span class="ic" data-icon="shopping-cart" data-size="20"></span>بقالة</div><div class="cat-g-btn" onclick="selMCat(this)"><span class="ic" data-icon="utensils" data-size="20"></span>مطعم</div><div class="cat-g-btn" onclick="selMCat(this)"><span class="ic" data-icon="pill" data-size="20"></span>صيدلية</div></div></div>
     <button class="btn-ac" onclick="submitMerchant()">إرسال طلب الانضمام</button>
   </div>
 </div>
