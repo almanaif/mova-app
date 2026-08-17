@@ -530,6 +530,72 @@ body{font-family:var(--font-family);background:var(--color-bg);color:var(--color
 .map-info-row .lbl{font-size:12px;color:var(--color-text-muted);font-weight:600}
 .map-info-row .val{font-size:13px;font-weight:800}
 
+/* ===== Map Upgrade Sprint: تحسينات CSS خاصة بالخريطة فقط (Controls + Loading + Responsiveness) ===== */
+
+/* أي حاوية خريطة في المشروع (Customer/Merchant/Driver/Admin) - تأمين إن الأبعاد ثابتة ومحسوبة
+   بشكل صريح مهما كانت حالة الـ Tab/Section اللي هي جواه (مخفي ثم يظهر)، ومنع أي overflow غير
+   مرغوب فيه للـ Canvas الداخلي بتاع MapLibre. width:100% صريح لكل الشاشات بما فيها Desktop. */
+.map-wrap,.loc-picker-map-wrap,.drv-map-wrap,.adm-map-wrap,
+#tracking-map,#loc-picker-map,#ride-request-map,#ride-status-map,
+#driver-map,#admin-map,#loc-map-wrap,#loc-map{
+  width:100%;
+  contain:layout style;
+}
+.map-wrap canvas,.loc-picker-map-wrap canvas,.drv-map-wrap canvas,.adm-map-wrap canvas,
+#loc-map-wrap canvas{
+  max-width:100%;
+}
+
+/* حالة تحميل الخريطة - خلفية Shimmer هادية بدل مربع رمادي فاضي ثابت لحد ما الـ tiles توصل،
+   بتتشال تلقائيًا (كلاس mv-map-loaded بيتضاف من maps.js) أول ما الخريطة تخلّص تحميل أو تفشل.
+   مطبّقة على حاوية الخريطة الفعلية نفسها (نفس الـ id اللي بياخده maplibregl container). */
+/* ملحوظة: #ride-request-map (rides.js) مش مشمولة هنا - دورة حياتها بتتحكم فيها rides.js اللي
+   خارج نطاق التعديل المسموح به دلوقتي (js/maps.js + css/styles.css فقط)، فمفيش ضمانة إن حد
+   هيشيل كلاس mv-map-loaded منها، وده كان هيسيبها Shimmer دائم بدل ما تحسّن حاجة. */
+#tracking-map,#ride-status-map,#driver-map,#admin-map,#loc-map,#loc-picker-map{
+  position:relative;
+  background:linear-gradient(90deg,var(--color-neutral-100) 25%,var(--color-neutral-50) 37%,var(--color-neutral-100) 63%);
+  background-size:400% 100%;
+  animation:mvMapShimmer 1.6s ease-in-out infinite;
+}
+#tracking-map.mv-map-loaded,#ride-status-map.mv-map-loaded,
+#driver-map.mv-map-loaded,#admin-map.mv-map-loaded,#loc-map.mv-map-loaded,#loc-picker-map.mv-map-loaded{
+  animation:none;background:var(--color-neutral-100);
+}
+@keyframes mvMapShimmer{0%{background-position:100% 0}100%{background-position:0 0}}
+
+/* رسالة خطأ تحميل الخريطة (لو تعذر الاتصال بالـ Tiles/Style) - تظهر فوق مكان الخريطة بدل ما
+   تفضل فاضية بصمت، وباستخدام نفس ألوان/خط التطبيق. */
+.mv-map-error-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  text-align:center;padding:var(--space-4);font-size:12px;font-weight:700;color:var(--color-text-muted);
+  background:var(--color-neutral-50);z-index:6}
+
+/* ===== MapLibre Controls (Zoom/Compass/Scale) - تنسيق يتماشى مع شكل التطبيق (Radius/Shadow)
+   ومتباعد كفاية عن زرار "توسيط"/"موقعي الحالي" (.map-recenter-btn) وعن حواف الشاشة، وبمساحة
+   لمس مريحة على الموبايل. الاتجاه اللي هي فيه (top-right فيزيائي) بيقعد في الزاوية اللي المستخدم
+   بيبدأ منها القراءة في RTL، بعيد عن أي Floating button تاني موجود في أسفل الخريطة. ===== */
+.maplibregl-ctrl-top-right{top:10px;inset-inline-end:10px;inset-inline-start:auto}
+.maplibregl-ctrl-bottom-right{bottom:10px;inset-inline-end:10px;inset-inline-start:auto}
+.maplibregl-ctrl-group{border-radius:var(--r2)!important;overflow:hidden;box-shadow:var(--shadow-sm)!important;background:var(--color-surface)!important}
+.maplibregl-ctrl-group button{width:34px!important;height:34px!important}
+.maplibregl-ctrl-scale{background:var(--color-surface)!important;border-color:var(--color-border)!important;
+  color:var(--color-text-secondary)!important;font-size:10px!important;font-weight:700!important;
+  border-radius:var(--radius-sm);padding:1px 5px!important;box-shadow:var(--shadow-sm)}
+
+/* الخريطة موجودة داخل شاشة العميل/التاجر بعرض التطبيق الأقصى (--page-max-width) أصلاً بالفعل،
+   فالـ Desktop مغطى تلقائيًا. هنا بس تأكيد إن ارتفاع الخريطة يفضل مريح على شاشات موبايل أصغر
+   (Landscape/شاشات قصيرة) من غير ما ياخد مساحة زيادة عن اللازم. */
+@media (max-width:380px){
+  #tracking-map{height:190px}
+  #ride-request-map{height:260px}
+  .loc-picker-map-wrap{height:230px}
+}
+@media (max-height:480px) and (orientation:landscape){
+  #tracking-map,#ride-status-map{height:160px}
+  .loc-picker-map-wrap{height:190px}
+  #driver-map{height:150px}
+}
+
 .rating-prompt{background:var(--color-surface);border-radius:var(--radius-lg);padding:var(--space-5) var(--space-4);margin:0 var(--space-4);box-shadow:var(--shadow-sm)}
 .rating-prompt h3{font-size:16px;font-weight:900;margin-bottom:6px;text-align:center}
 .rating-prompt p{font-size:13px;color:var(--color-text-muted);text-align:center;margin-bottom:var(--space-4)}
