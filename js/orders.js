@@ -6,7 +6,7 @@ import { NEW_STEPS, NEW_STEP_ICONS, NEW_STEP_LABELS, SL, esc, normalizeStatus, o
 import { custNav, updateCartUI } from './customer.js';
 import { createNotification } from './notifications.js';
 import { initTrackMap, trackPhaseKey } from './maps.js';
-import { reverseGeocode } from './routing.js';
+import { reverseGeocode, getRoute } from './routing.js';
 
 // =====================================================================================
 // ORDER STATE MACHINE
@@ -278,6 +278,29 @@ export async function goCheckout() {
       if (sd && typeof sd.lat === 'number' && typeof sd.lng === 'number') { storeLat = sd.lat; storeLng = sd.lng; }
     } catch (e) { /* Best-effort - فشل قراءة إحداثيات المتجر مايوقفش إنشاء الطلب */ }
 
+    // ===== Phase 2B (نهائي) - Distance Plumbing فقط، معلوماتي بحت =====
+    // بيانات حقيقية بس، صفر اختراع: بنحسب المسافة بس لو storeLat/Lng حقيقيين فعلًا (مش null،
+    // مش صفر/صفر بالظبط - إحداثية Sentinel شائعة مش موقع حقيقي، ومش برا المدى الجغرافي
+    // الصحيح) ووجهة العميل المؤكدة كمان حقيقية بنفس المعيار. لو أي حاجة ناقصة أو فشل الـ
+    // Routing (Timeout/Network/أي سبب) - distanceKm بتفضل null زي ما الوثيقة القديمة بالظبط
+    // (مفيش قيمة افتراضية، مفيش Geocoding بديل، مفيش موقع مندوب كبديل) وإنشاء الطلب نفسه
+    // مايتأثرش خالص - نفس سلوك try/catch الموجود فوق لقراءة إحداثيات المتجر بالظبط.
+    // calculateFare() فوق اتنفذت واتحسب منها fee قبل السطر ده بالكامل - مفيش أي تأثير على
+    // السعر النهائي هنا ولا أي تعديل على pricing.js (البند 7 صراحة).
+    function isValidCoord(lat, lng) {
+      return typeof lat === 'number' && typeof lng === 'number' &&
+        Number.isFinite(lat) && Number.isFinite(lng) &&
+        !(lat === 0 && lng === 0) && // (0,0) إحداثية Sentinel شائعة لأخطاء البيانات - مش موقع حقيقي لتطبيق شغال في مصر
+        lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+    }
+    let distanceKm = null;
+    if (isValidCoord(storeLat, storeLng) && isValidCoord(pickupLocation.latitude, pickupLocation.longitude)) {
+      try {
+        const route = await getRoute({ lat: storeLat, lng: storeLng }, { lat: pickupLocation.latitude, lng: pickupLocation.longitude });
+        if (route && Number.isFinite(route.distanceKm)) distanceKm = route.distanceKm;
+      } catch (e) { /* فشل Routing (Timeout/شبكة/إلخ) - distanceKm بيفضل null، إنشاء الطلب بيكمل عادي */ }
+    }
+
     const now = Date.now();
     // جديد (حماية رقم العميل - Option B): customerPhone متسابش هنا وقت الإنشاء خالص.
     // بيتحط جوه الطلب بس لحظة تعيين المندوب فعليًا - راجع acceptOrderAsDriver تحت.
@@ -293,6 +316,9 @@ export async function goCheckout() {
       customerLat: window.userLat, customerLng: window.userLng,
       // جديد (Sprint 3.7): null لحد ما المتاجر تتجهز بإحداثيات حقيقية - راجع الشرح فوق
       storeLat, storeLng,
+      // جديد (Phase 2B نهائي): معلوماتي بحت لأغراض تسعير مستقبلي محتمل - مش مستخدمة في
+      // حساب fee فوق خالص وماتأثرش على أي سعر حالي. null لو الإحداثيات مش متوفرة/الـ Routing فشل.
+      distanceKm,
       statusHistory: [
         { from: null, to: ORDER_STATUS.CREATED, at: now, by: { type: 'customer', uid: window.CU.uid } },
         { from: ORDER_STATUS.CREATED, to: ORDER_STATUS.WAITING_MERCHANT, at: now, by: 'system' },

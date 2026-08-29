@@ -6,6 +6,7 @@
 
 import { collection, db, doc, getAggregateFromServer, getCountFromServer, getDoc, orderBy, query, sum, updateDoc, where } from './firebase.js';
 import { debounce, esc, onListenersCleared, showToast } from './utils.js';
+import { icon } from './icons.js';
 import { createPaginatedListener } from './admin-pagination.js';
 import { logAudit } from './admin.js';
 
@@ -14,11 +15,11 @@ let listPager = null;
 let currentStatusFilter = 'all';
 
 // خرائط الحالة → تسمية عرض (نفس فلسفة SC/SL في utils.js بس محصورة على العميل)
-const STATUS_LABEL = { active: '✅ نشط', blocked: '🚫 محظور' };
+const STATUS_LABEL = { active: icon('check-circle',11)+' نشط', blocked: icon('x-circle',11)+' محظور' };
 
 function rowTemplate(u) {
-  const statusLbl = STATUS_LABEL[u.status] || '✅ نشط'; // مفيش status = نشط (Backward Compatible، نفس منطق Phase A)
-  return `<div class="drv-row2" style="cursor:pointer" onclick="openCustomerDetails('${u.id}')"><div class="drv-av2" style="font-size:16px">👤</div><div class="drv-info2"><strong>${esc(u.name)||'--'}</strong><small>📱 ${esc(u.phone||u.email)||'--'} | ${u.points||0} نقطة | ${statusLbl}</small></div></div>`;
+  const statusLbl = STATUS_LABEL[u.status] || STATUS_LABEL.active; // مفيش status = نشط (Backward Compatible، نفس منطق Phase A)
+  return `<div class="drv-row2" style="cursor:pointer" onclick="openCustomerDetails('${u.id}')"><div class="drv-av2">${icon('user',18)}</div><div class="drv-info2"><strong>${esc(u.name)||'--'}</strong><small style="display:inline-flex;align-items:center;gap:3px">${icon('phone',11)} ${esc(u.phone||u.email)||'--'} | ${u.points||0} نقطة | <span style="display:inline-flex;align-items:center;gap:3px">${statusLbl}</span></small></div></div>`;
 }
 
 function renderPage(id, moreId, isFirstPage, rowsHtml, accRef) {
@@ -134,7 +135,7 @@ export async function openCustomerDetails(id) {
     const blockBtn = document.getElementById('cd-block-btn');
     if (blockBtn) {
       const blocked = u.status === 'blocked';
-      blockBtn.textContent = blocked ? '✅ إلغاء الحظر' : '🚫 حظر العميل';
+      blockBtn.innerHTML = blocked ? icon('check-circle',13)+' إلغاء الحظر' : icon('x-circle',13)+' حظر العميل';
       blockBtn.className = blocked ? 'mb2 mb-view' : 'mb2 mb-acc';
     }
   } catch (e) { showToast('حدث خطأ في تحميل بيانات العميل', 'err'); console.log(e); }
@@ -179,7 +180,7 @@ function startCustomerOrdersListener(id) {
       const rows = docs.map(d => {
         const o = { ...d.data(), id: d.id };
         const dt = o.createdAt?.toDate ? o.createdAt.toDate().toLocaleDateString('ar-EG') : '--';
-        return `<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px;display:flex;justify-content:space-between"><span>#${o.id.slice(-6).toUpperCase()} • 🏪 ${esc(o.storeName)||'--'}</span><span>${o.total||0} ج • ${dt}</span></div>`;
+        return `<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px;display:flex;justify-content:space-between"><span style="display:inline-flex;align-items:center;gap:3px">#${o.id.slice(-6).toUpperCase()} • ${icon('store',11)} ${esc(o.storeName)||'--'}</span><span>${o.total||0} ج • ${dt}</span></div>`;
       });
       allRows = meta.isFirstPage ? rows : allRows.concat(rows);
       const el = document.getElementById('cd-orders-list');
@@ -206,7 +207,7 @@ export async function saveCustomerBasicInfo() {
   try {
     await updateDoc(doc(db,'users',currentDetailId), { name, phone, address });
     logAudit('تعديل بيانات عميل', `${currentDetailId} — ${name}`);
-    showToast('تم الحفظ ✅', 'ok');
+    showToast('تم الحفظ', 'ok');
   } catch (e) { showToast('حدث خطأ أثناء الحفظ', 'err'); console.log(e); }
 }
 
@@ -219,7 +220,7 @@ export async function toggleCustomerBlock() {
     if (!confirm(newStatus === 'blocked' ? 'تأكيد حظر هذا العميل؟' : 'تأكيد إلغاء الحظر؟')) return;
     await updateDoc(doc(db,'users',currentDetailId), { status: newStatus });
     logAudit(newStatus === 'blocked' ? 'حظر عميل' : 'إلغاء حظر عميل', currentDetailId);
-    showToast(newStatus === 'blocked' ? '🚫 تم حظر العميل' : '✅ تم إلغاء الحظر', 'ok');
+    showToast(newStatus === 'blocked' ? 'تم حظر العميل' : 'تم إلغاء الحظر', 'ok');
     openCustomerDetails(currentDetailId); // إعادة تحميل الحالة على نفس الشاشة
   } catch (e) { showToast('حدث خطأ', 'err'); console.log(e); }
 }
@@ -230,7 +231,7 @@ export async function softDeleteCustomer() {
   try {
     await updateDoc(doc(db,'users',currentDetailId), { status: 'deleted' });
     logAudit('حذف عميل (ناعم)', currentDetailId);
-    showToast('🗑️ تم حذف العميل', 'ok');
+    showToast('تم حذف العميل', 'ok');
     closeCustomerDetails();
   } catch (e) { showToast('حدث خطأ', 'err'); console.log(e); }
 }

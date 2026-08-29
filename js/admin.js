@@ -1,8 +1,9 @@
 // ===== admin.js — لوحة الإدارة: الطلبات، المستخدمين، المتاجر، التصنيفات، البانرات، الكوبونات، سجل التدقيق =====
 
 import { addDoc, collection, db, deleteDoc, doc, getAggregateFromServer, getCountFromServer, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, updateDoc, where, average, count } from './firebase.js';
-import { SC, SL, closeModal, esc, escJs, normalizeStatus, onListenersCleared, onSnapshot, secureCloudinaryUpload, showToast } from './utils.js';
+import { SL, closeModal, esc, escJs, normalizeStatus, onListenersCleared, onSnapshot, orderStatusBadge, secureCloudinaryUpload, showToast } from './utils.js';
 import { doLogout } from './auth.js';
+import { icon } from './icons.js';
 import { zoomDoc } from './driver.js';
 import { ORDER_STATUS, cancelOrder, listenSettings, transitionOrder } from './orders.js';
 import { getPricingConfig, savePricingConfig } from './pricing.js';
@@ -10,6 +11,7 @@ import { initAdminMap } from './maps.js';
 import { createPaginatedListener } from './admin-pagination.js';
 import { startCustomersListener, stopCustomersListener, registerCustomerListReset } from './admin-customers.js';
 import { startIncomingRequestsListeners, stopIncomingRequestsListeners } from './admin-requests.js';
+import { getPendingProdImage, renderProdImgPreview, removeProductImage, prodThumbHtml } from './merchant.js';
 
 // ===== Admin Map State (Phase 4B) — آخر نسخة معروفة من المناديب والمشاوير الجارية، عشان
 // initAdminMap تتنده بنفس الشكل (drivers, rides) لما أي مصدر منهم يتحدث، من غير ما نضطر
@@ -89,7 +91,7 @@ export async function loadAdminData() {
     const tDrvs=document.getElementById('adm-t-drvs'); if(tDrvs) tDrvs.textContent=drvs;
     const tMerch=document.getElementById('adm-t-merch'); if(tMerch) tMerch.textContent=allStores.length;
     let pd='';
-    pendDrvs.forEach(u=>{pd+=`<div class="drv-row2"><div class="drv-av2">👤</div><div class="drv-info2"><strong>${esc(u.fullName||u.name)||'--'}</strong><small>📱 ${esc(u.phone)||'--'}</small><br><span class="p-badge">⏳ بانتظار الموافقة</span></div><div class="drv-row2-acts"><button class="mb2 mb-view" onclick="openDrvModal('${u.id}')">تفاصيل</button></div></div>`;});
+    pendDrvs.forEach(u=>{pd+=`<div class="drv-row2"><div class="drv-av2">${icon('user',18)}</div><div class="drv-info2"><strong>${esc(u.fullName||u.name)||'--'}</strong><small style="display:inline-flex;align-items:center;gap:3px">${icon('phone',11)} ${esc(u.phone)||'--'}</small><br><span class="status status--pending">${icon('clock',11)} بانتظار الموافقة</span></div><div class="drv-row2-acts"><button class="mb2 mb-view" onclick="openDrvModal('${u.id}')">تفاصيل</button></div></div>`;});
     document.getElementById('adm-pend-drvs').innerHTML=pd||'<div class="empty-state" style="padding:14px"><p style="font-size:12px">لا يوجد مناديب معلّقون</p></div>';
     const pendC=document.getElementById('adm-pend-c'); if(pendC) pendC.textContent=pendDrvs.length;
     const storesC=document.getElementById('adm-stores-c'); if(storesC) storesC.textContent=allStores.length;
@@ -125,7 +127,7 @@ function startDriversListener() {
     onPage(docs, meta) {
       const rows = docs.map(d => {
         const u = { ...d.data(), id: d.id };
-        return `<div class="drv-row2" data-st="${u.status||'active'}"><div class="drv-av2">👤</div><div class="drv-info2"><strong>${esc(u.fullName||u.name)||'--'}</strong><small>📱 ${esc(u.phone)||'--'} | ${u.status==='pending'?'⏳ انتظار':'✅ نشط'}</small></div><div class="drv-row2-acts">${u.status==='pending'?`<button class="mb2 mb-view" onclick="openDrvModal('${u.id}')">📄 مراجعة المستندات</button>`:`<button class="mb2 mb-view" onclick="openDrvModal('${u.id}')">ملفه</button>`}</div></div>`;
+        return `<div class="drv-row2" data-st="${u.status||'active'}"><div class="drv-av2">${icon('user',18)}</div><div class="drv-info2"><strong>${esc(u.fullName||u.name)||'--'}</strong><small style="display:inline-flex;align-items:center;gap:3px">${icon('phone',11)} ${esc(u.phone)||'--'} | ${u.status==='pending'?icon('clock',11)+' انتظار':icon('check-circle',11)+' نشط'}</small></div><div class="drv-row2-acts">${u.status==='pending'?`<button class="mb2 mb-view" onclick="openDrvModal('${u.id}')">${icon('file-text',12)} مراجعة المستندات</button>`:`<button class="mb2 mb-view" onclick="openDrvModal('${u.id}')">ملفه</button>`}</div></div>`;
       });
       allRows = meta.isFirstPage ? rows : allRows.concat(rows);
       const el = document.getElementById('adm-drvs-list');
@@ -183,15 +185,15 @@ async function renderOneMerchantRow(m) {
     if(ratingC) ratingAvg=(rAgg.data().avg||0).toFixed(1);
   }catch(e){}
   const createdStr = m.createdAt?.toDate ? m.createdAt.toDate().toLocaleDateString('ar-EG') : '--';
-  const statusBadge = m.status==='pending'?'<span class="p-badge">⏳ بانتظار</span>'
-    : m.status==='active'?'<span style="color:var(--ok);font-size:10px;font-weight:700">✅ نشط</span>'
-    : m.status==='paused'?'<span style="color:var(--warn);font-size:10px;font-weight:700">⏸️ متوقف</span>'
-    : m.status==='deleted'?'<span style="color:var(--danger);font-size:10px;font-weight:700">🗑️ محذوف</span>'
-    : '<span style="color:var(--danger);font-size:10px;font-weight:700">❌ مرفوض</span>';
+  const statusBadge = m.status==='pending'?`<span class="status status--pending">${icon('clock',11)} بانتظار</span>`
+    : m.status==='active'?`<span class="status status--success">${icon('check-circle',11)} نشط</span>`
+    : m.status==='paused'?`<span class="status status--pending">${icon('pause',11)} متوقف</span>`
+    : m.status==='deleted'?`<span class="status status--danger">${icon('trash',11)} محذوف</span>`
+    : `<span class="status status--danger">${icon('x-circle',11)} مرفوض</span>`;
   const actionBtns = m.status==='pending'
     ? `<button class="mb2 mb-acc" onclick="admAccStore('${m.id}')">قبول</button><button class="mb2 mb-rej" onclick="admRejStore('${m.id}')">رفض</button>`
     : `<button class="mb2 mb-view" onclick="openStoreManage('${m.id}')">إدارة</button>${m.status==='active'?`<button class="mb2 mb-rej" onclick="smQuickPause('${m.id}')">إيقاف</button>`:m.status==='paused'?`<button class="mb2 mb-acc" onclick="smQuickActivate('${m.id}')">تفعيل</button>`:''}`;
-  return `<div class="drv-row2"><div class="drv-av2" style="background:#EFF6FF">🏬</div><div class="drv-info2"><strong>${mName}</strong><small>📱 ${esc(m.storePhone||m.phone)||'--'} | ${statusBadge}</small><br><small style="color:var(--mu);font-size:10px">📦 ${prodC} منتج • 🧾 ${ordC} طلب • ⭐ ${ratingAvg||0} (${ratingC}) • 📅 ${createdStr}</small></div><div class="drv-row2-acts">${actionBtns}</div></div>`;
+  return `<div class="drv-row2"><div class="drv-av2" style="background:#EFF6FF">${icon('store',18)}</div><div class="drv-info2"><strong>${mName}</strong><small style="display:inline-flex;align-items:center;gap:3px">${icon('phone',11)} ${esc(m.storePhone||m.phone)||'--'} | ${statusBadge}</small><br><small class="meta-row">${icon('package',11)} ${prodC} منتج • ${icon('file-text',11)} ${ordC} طلب • ${icon('star',11)} ${ratingAvg||0} (${ratingC}) • ${icon('calendar',11)} ${createdStr}</small></div><div class="drv-row2-acts">${actionBtns}</div></div>`;
 }
 
 // ===== قائمة "آخر 5 طلبات" (جديد - Sprint 2.3 Phase 2a) =====
@@ -212,10 +214,10 @@ function renderRecentOrders() {
         const lastHist = Array.isArray(o.statusHistory) && o.statusHistory.length ? o.statusHistory[o.statusHistory.length-1] : null;
         const validNext = ADMIN_NEXT_STATUS[o.status] || [];
         html += `<div style="padding:9px 0;border-bottom:1px solid var(--border)">
-          <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:11px;font-weight:700">#${o.id.slice(-6).toUpperCase()}</span><span class="${SC[o.status]||'sb sb-new'}">${SL[o.status]||'--'}</span></div>
-          <div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:var(--mu)">🏪 ${esc(o.storeName)||'--'} • ${esc(o.customerName)||'عميل'}</span><span><strong>${o.total||0} ج</strong></span></div>
-          <div style="font-size:10px;color:var(--mu);margin-top:2px">🛵 ${esc(o.driverName)||'بدون مندوب'} • 🕐 ${dt?dt.toLocaleString('ar-EG'):'--'}${ut?' • آخر تحديث: '+ut.toLocaleString('ar-EG'):''}</div>
-          ${lastHist?`<div style="font-size:10px;color:var(--mu);margin-top:2px">📋 آخر انتقال: ${SL[lastHist.from]||lastHist.from||'--'} ← ${SL[lastHist.to]||lastHist.to}</div>`:''}
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:11px;font-weight:700">#${o.id.slice(-6).toUpperCase()}</span>${orderStatusBadge(o.status)}</div>
+          <div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:var(--mu);display:inline-flex;align-items:center;gap:3px">${icon('store',12)} ${esc(o.storeName)||'--'} • ${esc(o.customerName)||'عميل'}</span><span><strong>${o.total||0} ج</strong></span></div>
+          <div style="font-size:10px;color:var(--mu);margin-top:2px;display:flex;align-items:center;gap:3px;flex-wrap:wrap">${icon('bike',11)} ${esc(o.driverName)||'بدون مندوب'} • ${icon('clock',11)} ${dt?dt.toLocaleString('ar-EG'):'--'}${ut?' • آخر تحديث: '+ut.toLocaleString('ar-EG'):''}</div>
+          ${lastHist?`<div style="font-size:10px;color:var(--mu);margin-top:2px">آخر انتقال: ${SL[lastHist.from]||lastHist.from||'--'} ← ${SL[lastHist.to]||lastHist.to}</div>`:''}
           <div style="display:flex;gap:4px;margin-top:5px;flex-wrap:wrap">
             ${validNext.map(s=>`<button class="mb2 mb-view" onclick="admUpdOrd('${o.id}','${s}')" style="font-size:9px">${SL[s]}</button>`).join('')}
           </div>
@@ -253,8 +255,8 @@ export function filtOrds(group, btn) {
       const rows = docs.map(d => {
         const o = { ...d.data(), id: d.id };
         return `<div class="drv-row2" data-status="${normalizeStatus(o.status)||'waiting_merchant'}" style="padding:9px 0;border-bottom:1px solid var(--border);display:block">
-      <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:11px;font-weight:700">#${o.id.slice(-6).toUpperCase()}</span><span class="${SC[o.status]||'sb sb-new'}">${SL[o.status]||'--'}</span></div>
-      <div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:var(--mu)">🏪 ${esc(o.storeName)||'--'}</span><span>${o.total||0} ج <span style="color:var(--p)">(${o.commission||0} ج)</span></span></div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:11px;font-weight:700">#${o.id.slice(-6).toUpperCase()}</span>${orderStatusBadge(o.status)}</div>
+      <div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:var(--mu);display:inline-flex;align-items:center;gap:3px">${icon('store',12)} ${esc(o.storeName)||'--'}</span><span>${o.total||0} ج <span style="color:var(--p)">(${o.commission||0} ج)</span></span></div>
     </div>`;
       });
       allRows = meta.isFirstPage ? rows : allRows.concat(rows);
@@ -292,7 +294,7 @@ export function loadAuditLog(){
       const timeStr=dt?dt.toLocaleString('ar-EG',{dateStyle:'short',timeStyle:'short'}):'--';
       html+=`<div style="padding:9px 0;border-bottom:1px solid var(--border)">
         <div style="display:flex;justify-content:space-between;margin-bottom:3px"><strong style="font-size:12px">${esc(a.action)}</strong><small style="color:var(--mu);font-size:10px">${timeStr}</small></div>
-        <div style="font-size:11px;color:var(--mu)">👤 ${esc(a.adminName)||'أدمن'}${a.details?' — '+esc(a.details):''}</div>
+        <div style="font-size:11px;color:var(--mu);display:inline-flex;align-items:center;gap:3px">${icon('user',12)} ${esc(a.adminName)||'أدمن'}${a.details?' — '+esc(a.details):''}</div>
       </div>`;
     });
     document.getElementById('adm-audit-list').innerHTML=html||'<div class="empty-state" style="padding:14px"><p style="font-size:12px">لا يوجد سجل عمليات بعد</p></div>';
@@ -333,32 +335,32 @@ export async function admUpdOrd(id,status){
     const actor = { type:'admin', uid: window.CU?.uid, name: window.CUD?.name || 'أدمن' };
     if (status === ORDER_STATUS.CANCELLED) await cancelOrder(id, actor);
     else await transitionOrder(id, status, actor);
-    showToast('✅ تم تحديث الطلب','ok');
+    showToast('تم تحديث الطلب','ok');
   }catch(e){
     showToast(e?.message==='invalid-transition' ? 'انتقال غير مسموح لهذه الحالة' : 'حدث خطأ','err');
   }
 }
-export async function admAccDrv(uid){try{await updateDoc(doc(db,'users',uid),{status:'active',approvedAt:serverTimestamp()});await addDoc(collection(db,'notifications'),{userId:uid,title:'🎉 تم قبول حسابك',body:'تم اعتماد حسابك كمندوب توصيل، تقدر تبدأ تستقبل الطلبات الآن.',type:'or',read:false,createdAt:serverTimestamp()});logAudit('قبول مندوب');showToast('✅ تم قبول المندوب','ok');closeModal('drv-modal');}catch(e){showToast('حدث خطأ','err');}}
+export async function admAccDrv(uid){try{await updateDoc(doc(db,'users',uid),{status:'active',approvedAt:serverTimestamp()});await addDoc(collection(db,'notifications'),{userId:uid,title:'تم قبول حسابك',body:'تم اعتماد حسابك كمندوب توصيل، تقدر تبدأ تستقبل الطلبات الآن.',type:'or',read:false,createdAt:serverTimestamp()});logAudit('قبول مندوب');showToast('تم قبول المندوب','ok');closeModal('drv-modal');}catch(e){showToast('حدث خطأ','err');}}
 export function admRejDrv(uid){
   openReasonModal('سبب رفض المندوب', ['صورة البطاقة غير واضحة','الرخصة منتهية','البيانات غير مطابقة'], async(reason)=>{
     try{
       await updateDoc(doc(db,'users',uid),{status:'rejected',rejectReason:reason,rejectedAt:serverTimestamp()});
-      await addDoc(collection(db,'notifications'),{userId:uid,title:'❌ لم تتم الموافقة على حسابك',body:'للأسف لم يتم قبول طلبك كمندوب. السبب: '+reason,type:'gn',read:false,createdAt:serverTimestamp()});
+      await addDoc(collection(db,'notifications'),{userId:uid,title:'لم تتم الموافقة على حسابك',body:'للأسف لم يتم قبول طلبك كمندوب. السبب: '+reason,type:'gn',read:false,createdAt:serverTimestamp()});
       logAudit('رفض مندوب', reason);
-      showToast('❌ تم رفض المندوب','err');
+      showToast('تم رفض المندوب','err');
       closeModal('drv-modal');
     }catch(e){showToast('حدث خطأ','err');}
   });
 }
-export async function admAccStore(id){try{await updateDoc(doc(db,'users',id),{status:'active',approvedAt:serverTimestamp()});await updateDoc(doc(db,'stores',id),{status:'active'}).catch(()=>{});await addDoc(collection(db,'notifications'),{userId:id,title:'🎉 تم قبول متجرك',body:'تم اعتماد متجرك على منصة MOVA، تقدر تضيف منتجاتك وتستقبل الطلبات الآن.',type:'or',read:false,createdAt:serverTimestamp()});logAudit('قبول متجر');showToast('✅ تم قبول المتجر','ok');}catch(e){showToast('حدث خطأ','err');}}
+export async function admAccStore(id){try{await updateDoc(doc(db,'users',id),{status:'active',approvedAt:serverTimestamp()});await updateDoc(doc(db,'stores',id),{status:'active'}).catch(()=>{});await addDoc(collection(db,'notifications'),{userId:id,title:'تم قبول متجرك',body:'تم اعتماد متجرك على منصة MOVA، تقدر تضيف منتجاتك وتستقبل الطلبات الآن.',type:'or',read:false,createdAt:serverTimestamp()});logAudit('قبول متجر');showToast('تم قبول المتجر','ok');}catch(e){showToast('حدث خطأ','err');}}
 export function admRejStore(id){
   openReasonModal('سبب رفض المتجر', ['المستندات غير واضحة','بيانات المتجر غير مكتملة','نشاط غير مسموح به'], async(reason)=>{
     try{
       await updateDoc(doc(db,'users',id),{status:'rejected',rejectReason:reason,rejectedAt:serverTimestamp()});
       await updateDoc(doc(db,'stores',id),{status:'rejected'}).catch(()=>{});
-      await addDoc(collection(db,'notifications'),{userId:id,title:'❌ لم تتم الموافقة على متجرك',body:'للأسف لم يتم قبول طلب انضمام متجرك. السبب: '+reason,type:'gn',read:false,createdAt:serverTimestamp()});
+      await addDoc(collection(db,'notifications'),{userId:id,title:'لم تتم الموافقة على متجرك',body:'للأسف لم يتم قبول طلب انضمام متجرك. السبب: '+reason,type:'gn',read:false,createdAt:serverTimestamp()});
       logAudit('رفض متجر', reason);
-      showToast('❌ تم رفض المتجر','err');
+      showToast('تم رفض المتجر','err');
     }catch(e){showToast('حدث خطأ','err');}
   });
 }
@@ -370,8 +372,8 @@ export async function openDrvModal(uid){
     const docsHtml = Object.keys(docLabels).map(k=>{
       const url=docs[k];
       return url
-        ? `<div class="doc-prev" style="padding:0;overflow:hidden;cursor:pointer" onclick="zoomDoc('${escJs(url)}')"><img src="${esc(url)}" style="width:100%;height:80px;object-fit:cover;display:block"><small style="display:block;padding:3px;font-size:9px">🔍 ${docLabels[k]}</small></div>`
-        : `<div class="doc-prev">🚫<br><small style="font-size:9px">${docLabels[k]} (لم يُرفع)</small></div>`;
+        ? `<div class="doc-prev" style="padding:0;overflow:hidden;cursor:pointer" onclick="zoomDoc('${escJs(url)}')"><img src="${esc(url)}" style="width:100%;height:80px;object-fit:cover;display:block"><small style="display:flex;align-items:center;justify-content:center;gap:3px;padding:3px;font-size:9px">${icon('search',10)} ${docLabels[k]}</small></div>`
+        : `<div class="doc-prev" style="color:var(--mu)">${icon('alert-circle',20)}<br><small style="font-size:9px">${docLabels[k]} (لم يُرفع)</small></div>`;
     }).join('');
     const createdStr = u.createdAt?.toDate ? u.createdAt.toDate().toLocaleDateString('ar-EG') : '--';
     document.getElementById('drv-modal-content').innerHTML=`
@@ -379,9 +381,9 @@ export async function openDrvModal(uid){
       <div class="info-row"><span class="il">الهاتف</span><span class="iv">${esc(u.phone)||'--'}</span></div>
       <div class="info-row"><span class="il">العنوان</span><span class="iv">${esc(u.address)||'--'}</span></div>
       <div class="info-row"><span class="il">تاريخ التسجيل</span><span class="iv">${createdStr}</span></div>
-      <div class="info-row"><span class="il">الحالة</span><span class="iv">${u.status==='pending'?'⏳ بانتظار الموافقة':u.status==='active'?'✅ نشط':'❌ مرفوض'}</span></div>
+      <div class="info-row"><span class="il">الحالة</span><span class="iv">${u.status==='pending'?`<span class="status status--pending">${icon('clock',12)} بانتظار الموافقة</span>`:u.status==='active'?`<span class="status status--success">${icon('check-circle',12)} نشط</span>`:`<span class="status status--danger">${icon('x-circle',12)} مرفوض</span>`}</span></div>
       ${u.status==='rejected'&&u.rejectReason?`<div class="info-row"><span class="il">سبب الرفض</span><span class="iv" style="color:var(--danger)">${esc(u.rejectReason)}</span></div>`:''}
-      <div style="margin:10px 0"><div style="font-size:11px;font-weight:700;color:var(--mu);margin-bottom:6px">📄 المستندات (اضغط للتكبير):</div>
+      <div style="margin:10px 0"><div style="font-size:11px;font-weight:700;color:var(--mu);margin-bottom:6px;display:flex;align-items:center;gap:4px">${icon('file-text',13)} المستندات (اضغط للتكبير):</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">${docsHtml}</div></div>`;
     const accBtn=document.getElementById('acc-btn'), rejBtn=document.getElementById('rej-btn');
     accBtn.style.display = u.status==='pending'?'block':'none';
@@ -413,24 +415,24 @@ export async function renderAdminStoresList(allStores){
       if(ratingC){let sum=0;rSnap.forEach(d=>sum+=d.data().stars||0);ratingAvg=(sum/ratingC).toFixed(1);}
     }catch(e){}
     const createdStr = m.createdAt?.toDate ? m.createdAt.toDate().toLocaleDateString('ar-EG') : '--';
-    const statusBadge = m.status==='pending'?'<span class="p-badge">⏳ بانتظار</span>'
-      : m.status==='active'?'<span style="color:var(--ok);font-size:10px;font-weight:700">✅ نشط</span>'
-      : m.status==='paused'?'<span style="color:var(--warn);font-size:10px;font-weight:700">⏸️ متوقف</span>'
-      : m.status==='deleted'?'<span style="color:var(--danger);font-size:10px;font-weight:700">🗑️ محذوف</span>'
-      : '<span style="color:var(--danger);font-size:10px;font-weight:700">❌ مرفوض</span>';
+    const statusBadge = m.status==='pending'?`<span class="status status--pending">${icon('clock',11)} بانتظار</span>`
+      : m.status==='active'?`<span class="status status--success">${icon('check-circle',11)} نشط</span>`
+      : m.status==='paused'?`<span class="status status--pending">${icon('pause',11)} متوقف</span>`
+      : m.status==='deleted'?`<span class="status status--danger">${icon('trash',11)} محذوف</span>`
+      : `<span class="status status--danger">${icon('x-circle',11)} مرفوض</span>`;
     const actionBtns = m.status==='pending'
       ? `<button class="mb2 mb-acc" onclick="admAccStore('${m.id}')">قبول</button><button class="mb2 mb-rej" onclick="admRejStore('${m.id}')">رفض</button>`
       : `<button class="mb2 mb-view" onclick="openStoreManage('${m.id}')">إدارة</button>${m.status==='active'?`<button class="mb2 mb-rej" onclick="smQuickPause('${m.id}')">إيقاف</button>`:m.status==='paused'?`<button class="mb2 mb-acc" onclick="smQuickActivate('${m.id}')">تفعيل</button>`:''}`;
-    return `<div class="drv-row2"><div class="drv-av2" style="background:#EFF6FF">🏬</div><div class="drv-info2"><strong>${mName}</strong><small>📱 ${esc(m.storePhone||m.phone)||'--'} | ${statusBadge}</small><br><small style="color:var(--mu);font-size:10px">📦 ${prodC} منتج • 🧾 ${ordC} طلب • ⭐ ${ratingAvg||0} (${ratingC}) • 📅 ${createdStr}</small></div><div class="drv-row2-acts">${actionBtns}</div></div>`;
+    return `<div class="drv-row2"><div class="drv-av2" style="background:#EFF6FF">${icon('store',18)}</div><div class="drv-info2"><strong>${mName}</strong><small style="display:inline-flex;align-items:center;gap:3px">${icon('phone',11)} ${esc(m.storePhone||m.phone)||'--'} | ${statusBadge}</small><br><small class="meta-row">${icon('package',11)} ${prodC} منتج • ${icon('file-text',11)} ${ordC} طلب • ${icon('star',11)} ${ratingAvg||0} (${ratingC}) • ${icon('calendar',11)} ${createdStr}</small></div><div class="drv-row2-acts">${actionBtns}</div></div>`;
   }));
   document.getElementById('adm-stores-list').innerHTML = rows.join('');
 }
 export async function smQuickPause(uid){
   if(!confirm('هل تريد إيقاف استقبال الطلبات لهذا المتجر مؤقتًا؟')) return;
-  try{ await updateDoc(doc(db,'stores',uid),{status:'paused',updatedAt:serverTimestamp()}); await updateDoc(doc(db,'users',uid),{status:'paused'}).catch(()=>{}); logAudit('إيقاف متجر مؤقتًا'); showToast('✅ تم الإيقاف','ok'); }catch(e){showToast('حدث خطأ','err');}
+  try{ await updateDoc(doc(db,'stores',uid),{status:'paused',updatedAt:serverTimestamp()}); await updateDoc(doc(db,'users',uid),{status:'paused'}).catch(()=>{}); logAudit('إيقاف متجر مؤقتًا'); showToast('تم الإيقاف','ok'); }catch(e){showToast('حدث خطأ','err');}
 }
 export async function smQuickActivate(uid){
-  try{ await updateDoc(doc(db,'stores',uid),{status:'active',updatedAt:serverTimestamp()}); await updateDoc(doc(db,'users',uid),{status:'active'}).catch(()=>{}); logAudit('تفعيل متجر'); showToast('✅ تم التفعيل','ok'); }catch(e){showToast('حدث خطأ','err');}
+  try{ await updateDoc(doc(db,'stores',uid),{status:'active',updatedAt:serverTimestamp()}); await updateDoc(doc(db,'users',uid),{status:'active'}).catch(()=>{}); logAudit('تفعيل متجر'); showToast('تم التفعيل','ok'); }catch(e){showToast('حدث خطأ','err');}
 }
 export async function openStoreManage(uid){
   window.smCurrentStore = uid;
@@ -448,8 +450,8 @@ export async function openStoreManage(uid){
     document.getElementById('sm-hours').value = s.hours||'';
     document.getElementById('sm-minord').value = s.minOrder||'';
     document.getElementById('sm-delfee').value = s.deliveryFee||'';
-    const logoBox=document.getElementById('sm-logo-box'); logoBox.style.backgroundImage = s.logoUrl?`url('${s.logoUrl}')`:'none'; logoBox.textContent = s.logoUrl?'':'🏪';
-    const coverBox=document.getElementById('sm-cover-box'); coverBox.style.backgroundImage = s.coverUrl?`url('${s.coverUrl}')`:'none'; coverBox.textContent = s.coverUrl?'':'🖼️ صورة الغلاف';
+    const logoBox=document.getElementById('sm-logo-box'); logoBox.style.backgroundImage = s.logoUrl?`url('${s.logoUrl}')`:'none'; logoBox.innerHTML = s.logoUrl?'':icon('store',26);
+    const coverBox=document.getElementById('sm-cover-box'); coverBox.style.backgroundImage = s.coverUrl?`url('${s.coverUrl}')`:'none'; coverBox.innerHTML = s.coverUrl?'':(icon('image',20)+' صورة الغلاف');
     smSetOpen(s.isOpen!==false);
     document.getElementById('screen-store-manage').style.display='block';
     smTab('profile', document.querySelector('#screen-store-manage .adm-nb'));
@@ -492,7 +494,7 @@ export async function smSaveProfile(){
     await updateDoc(doc(db,'users',uid), {storeName:payload.storeName, storePhone:payload.storePhone, address:payload.address}).catch(()=>{});
     logAudit('تعديل بيانات متجر', payload.storeName);
     document.getElementById('sm-title').textContent = payload.storeName;
-    showToast('✅ تم حفظ بيانات المتجر','ok');
+    showToast('تم حفظ بيانات المتجر','ok');
   }catch(e){ showToast('حدث خطأ في الحفظ','err'); }
 }
 export async function smUploadLogo(){
@@ -504,9 +506,9 @@ export async function smUploadLogo(){
       const url=await secureCloudinaryUpload(file);
       await updateDoc(doc(db,'stores',window.smCurrentStore),{logoUrl:url,updatedAt:serverTimestamp()});
       document.getElementById('sm-logo-box').style.backgroundImage=`url('${url}')`;
-      document.getElementById('sm-logo-box').textContent='';
+      document.getElementById('sm-logo-box').innerHTML='';
       logAudit('تغيير شعار متجر');
-      showToast('✅ تم تحديث الشعار','ok');
+      showToast('تم تحديث الشعار','ok');
     }catch(e){ showToast('فشل رفع الصورة','err'); }
   };
   inp.click();
@@ -520,9 +522,9 @@ export async function smUploadCover(){
       const url=await secureCloudinaryUpload(file);
       await updateDoc(doc(db,'stores',window.smCurrentStore),{coverUrl:url,updatedAt:serverTimestamp()});
       document.getElementById('sm-cover-box').style.backgroundImage=`url('${url}')`;
-      document.getElementById('sm-cover-box').textContent='';
+      document.getElementById('sm-cover-box').innerHTML='';
       logAudit('تغيير صورة غلاف متجر');
-      showToast('✅ تم تحديث الغلاف','ok');
+      showToast('تم تحديث الغلاف','ok');
     }catch(e){ showToast('فشل رفع الصورة','err'); }
   };
   inp.click();
@@ -532,9 +534,9 @@ export async function smDeleteCover(){
   try{
     await updateDoc(doc(db,'stores',window.smCurrentStore),{coverUrl:'',updatedAt:serverTimestamp()});
     document.getElementById('sm-cover-box').style.backgroundImage='none';
-    document.getElementById('sm-cover-box').textContent='🖼️ صورة الغلاف';
+    document.getElementById('sm-cover-box').innerHTML=icon('image',20)+' صورة الغلاف';
     logAudit('حذف صورة غلاف متجر');
-    showToast('✅ تم حذف الغلاف','ok');
+    showToast('تم حذف الغلاف','ok');
   }catch(e){ showToast('حدث خطأ','err'); }
 }
 export async function smSetAccountStatus(status){
@@ -544,7 +546,7 @@ export async function smSetAccountStatus(status){
     await updateDoc(doc(db,'stores',window.smCurrentStore),{status: status==='paused'?'paused':'active', updatedAt:serverTimestamp()});
     await updateDoc(doc(db,'users',window.smCurrentStore),{status: status==='paused'?'paused':'active'}).catch(()=>{});
     logAudit(status==='paused'?'إيقاف متجر مؤقتًا':'تفعيل متجر');
-    showToast('✅ تم التحديث','ok');
+    showToast('تم التحديث','ok');
   }catch(e){ showToast('حدث خطأ','err'); }
 }
 export async function smDeleteStore(){
@@ -554,7 +556,7 @@ export async function smDeleteStore(){
     await updateDoc(doc(db,'stores',window.smCurrentStore),{status:'deleted',updatedAt:serverTimestamp()});
     await updateDoc(doc(db,'users',window.smCurrentStore),{status:'deleted'}).catch(()=>{});
     logAudit('حذف متجر');
-    showToast('✅ تم حذف المتجر','ok');
+    showToast('تم حذف المتجر','ok');
     closeStoreManage();
   }catch(e){ showToast('حدث خطأ','err'); }
 }
@@ -563,18 +565,18 @@ export function smLoadProducts(uid){
   if (smProdsUnsub) { try { smProdsUnsub(); } catch(e){} smProdsUnsub = null; }
   const q=query(collection(db,'products'),where('merchantId','==',uid));
   smProdsUnsub=onSnapshot(q,snap=>{
-    if(snap.empty){document.getElementById('sm-prods-list').innerHTML='<div class="empty-state"><div class="ei">📦</div><p>لا توجد منتجات</p></div>';return;}
+    if(snap.empty){document.getElementById('sm-prods-list').innerHTML=`<div class="empty-state"><div class="ei">${icon('package',34)}</div><p>لا توجد منتجات</p></div>`;return;}
     let html='';
     snap.forEach(d=>{
       const p={...d.data(),id:d.id};
-      html+=`<div style="background:#fff;border-radius:var(--r);padding:12px;margin-bottom:8px;box-shadow:var(--sh);border:1px solid var(--border);display:flex;gap:10px;align-items:center">
-        <div style="width:48px;height:48px;border-radius:10px;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0">${p.icon||'📦'}</div>
+      html+=`<div class="row-card">
+        <div class="thumb-md">${prodThumbHtml(p,22)}</div>
         <div style="flex:1"><strong style="font-size:13px;font-weight:800;display:block">${esc(p.name)}</strong><small style="color:var(--mu);font-size:11px">${esc(p.unit)}${p.stock!=null?' • الكمية: '+p.stock:''}</small>
           <div style="font-size:14px;font-weight:900;color:var(--p);margin-top:3px">${p.price} ج</div>
           <div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap">
-            <button class="mb2 mb-view" onclick='openEditProd(${JSON.stringify(p).replace(/</g,"\\u003c")})'>✏️ تعديل</button>
-            <button class="mb2 ${p.available!==false?'mb-rej':'mb-acc'}" onclick="toggleProdAvail('${d.id}',${p.available!==false})">${p.available!==false?'⏸️ إيقاف':'▶️ تفعيل'}</button>
-            <button class="mb2 mb-rej" onclick="admDelProd('${d.id}','${escJs(p.name)}')">🗑️ حذف</button>
+            <button class="mb2 mb-view" onclick='openEditProd(${JSON.stringify(p).replace(/</g,"\\u003c")})'>${icon('edit',13)} تعديل</button>
+            <button class="mb2 ${p.available!==false?'mb-rej':'mb-acc'}" onclick="toggleProdAvail('${d.id}',${p.available!==false})">${p.available!==false?icon('pause',13)+' إيقاف':icon('play',13)+' تفعيل'}</button>
+            <button class="mb2 mb-rej" onclick="admDelProd('${d.id}','${escJs(p.name)}')">${icon('trash',13)} حذف</button>
           </div>
         </div>
       </div>`;
@@ -588,7 +590,7 @@ export function openEditProd(p){
   document.getElementById('ep-price').value=p.price||'';
   document.getElementById('ep-stock').value=p.stock??'';
   document.getElementById('ep-unit').value=p.unit||'';
-  document.getElementById('ep-icon').value=p.icon||'📦';
+  if (p.imageUrl) renderProdImgPreview('ep', p.imageUrl); else removeProductImage('ep'); // removeProductImage هنا بترجع صندوق "اختر صورة" الفاضي - مش بتحذف حاجة فعلية
   document.getElementById('edit-prod-modal').classList.add('open');
 }
 export async function saveEditProd(){
@@ -597,20 +599,20 @@ export async function saveEditProd(){
   const price=parseFloat(document.getElementById('ep-price').value)||0;
   const stockRaw=document.getElementById('ep-stock').value;
   const unit=document.getElementById('ep-unit').value.trim();
-  const icon=document.getElementById('ep-icon').value||'📦';
+  const imageUrl = getPendingProdImage('ep');
   if(!id||!name||!price){ showToast('يرجى تعبئة الاسم والسعر','err'); return; }
   try{
-    await updateDoc(doc(db,'products',id),{name,price,unit,icon,stock: stockRaw===''?null:parseInt(stockRaw), updatedAt:serverTimestamp()});
+    await updateDoc(doc(db,'products',id),{name,price,unit,imageUrl,stock: stockRaw===''?null:parseInt(stockRaw), updatedAt:serverTimestamp()});
     logAudit('تعديل منتج', name+' — سعر '+price+' ج');
     closeModal('edit-prod-modal');
-    showToast('✅ تم حفظ المنتج','ok');
+    showToast('تم حفظ المنتج','ok');
   }catch(e){ showToast('حدث خطأ','err'); }
 }
 export async function toggleProdAvail(id, current){
   try{
     await updateDoc(doc(db,'products',id),{available: !current, updatedAt:serverTimestamp()});
     logAudit(current?'إيقاف منتج':'تفعيل منتج');
-    showToast('✅ تم التحديث','ok');
+    showToast('تم التحديث','ok');
   }catch(e){ showToast('حدث خطأ','err'); }
 }
 export async function admDelProd(id, name){
@@ -618,7 +620,7 @@ export async function admDelProd(id, name){
   try{
     await deleteDoc(doc(db,'products',id));
     logAudit('حذف منتج', name||'');
-    showToast('✅ تم حذف المنتج','ok');
+    showToast('تم حذف المنتج','ok');
   }catch(e){ showToast('حدث خطأ','err'); }
 }
 
@@ -655,7 +657,7 @@ export async function saveComm(){
     await setDoc(doc(db,'settings','commission'),{rate:v,updatedAt:serverTimestamp()});
     // مانحدّثش window.commRate يدوي هنا - هيتحدّث لوحده من خلال listenSettings() لما التغيير يوصل
     document.getElementById('adm-comm-r').textContent=v+'%';
-    showToast('✅ تم تحديث العمولة إلى '+v+'%','ok');
+    showToast('تم تحديث العمولة إلى '+v+'%','ok');
   }catch(e){ showToast('حدث خطأ في حفظ العمولة','err'); }
 }
 
@@ -692,7 +694,7 @@ export async function savePricingSettings() {
     const newVersion = await savePricingConfig(null, deliveryCfg);
     document.getElementById('pr-version').textContent = newVersion;
     logAudit('تحديث إعدادات تسعير التوصيل', `Base:${baseFare} Min:${minimumFare} v${newVersion}`);
-    showToast('✅ تم تحديث إعدادات التسعير', 'ok');
+    showToast('تم تحديث إعدادات التسعير', 'ok');
   } catch (e) { showToast('حدث خطأ في حفظ التسعير', 'err'); console.error('[savePricingSettings]', e); }
 }
 
@@ -702,40 +704,40 @@ export async function savePricingSettings() {
 export function renderAdminCats(items) {
   const list = document.getElementById('adm-cats-list');
   if (!list) return;
-  if (!items.length) { list.innerHTML = '<div class="empty-state" style="padding:16px"><p style="font-size:12px">لا توجد أقسام بعد</p></div>'; return; }
-  list.innerHTML = items.map(c => `<div class="drv-row2"><div class="drv-av2" style="background:#F3F4F6">${esc(c.icon)||'🗂️'}</div><div class="drv-info2"><strong>${esc(c.label)}</strong><small>ترتيب: ${c.order??0}</small></div><div class="drv-row2-acts"><button class="mb2 mb-view" onclick="editCat('${c.id}','${escJs(c.label)}','${escJs(c.icon)}',${c.order??0})">تعديل</button><button class="mb2 mb-rej" onclick="delCat('${c.id}')">حذف</button></div></div>`).join('');
+  if (!items.length) { list.innerHTML = `<div class="empty-state" style="padding:16px"><div class="ei">${icon('tag',30)}</div><p style="font-size:12px">لا توجد أقسام بعد</p></div>`; return; }
+  list.innerHTML = items.map(c => `<div class="drv-row2"><div class="drv-av2 drv-av2--photo" style="overflow:hidden">${c.imageUrl ? `<img src="${esc(c.imageUrl)}" alt="${esc(c.label)}" style="width:100%;height:100%;object-fit:cover">` : icon('tag',20)}</div><div class="drv-info2"><strong>${esc(c.label)}</strong><small>ترتيب: ${c.order??0}</small></div><div class="drv-row2-acts"><button class="mb2 mb-view" onclick='editCat(${JSON.stringify(c).replace(/</g,"\\u003c")})'>${icon('edit',13)} تعديل</button><button class="mb2 mb-rej" onclick="delCat('${c.id}')">${icon('trash',13)} حذف</button></div></div>`).join('');
 }
 export function openAddCat() {
-  document.getElementById('cat-modal-title').textContent = '➕ إضافة قسم';
+  document.getElementById('cat-modal-title').textContent = 'إضافة قسم';
   document.getElementById('ac-id').value = '';
   document.getElementById('ac-label').value = '';
-  document.getElementById('ac-icon').value = '';
   document.getElementById('ac-order').value = '';
+  removeProductImage('ac');
   document.getElementById('add-cat-modal').classList.add('open');
 }
-export function editCat(id, label, icon, order) {
-  document.getElementById('cat-modal-title').textContent = '✏️ تعديل قسم';
-  document.getElementById('ac-id').value = id;
-  document.getElementById('ac-label').value = label;
-  document.getElementById('ac-icon').value = icon;
-  document.getElementById('ac-order').value = order;
+export function editCat(c) {
+  document.getElementById('cat-modal-title').textContent = 'تعديل قسم';
+  document.getElementById('ac-id').value = c.id;
+  document.getElementById('ac-label').value = c.label||'';
+  document.getElementById('ac-order').value = c.order??0;
+  if (c.imageUrl) renderProdImgPreview('ac', c.imageUrl); else removeProductImage('ac');
   document.getElementById('add-cat-modal').classList.add('open');
 }
 export async function saveCat() {
   const id = document.getElementById('ac-id').value;
   const label = document.getElementById('ac-label').value.trim();
-  const icon = document.getElementById('ac-icon').value.trim();
   const order = parseInt(document.getElementById('ac-order').value) || 0;
+  const imageUrl = getPendingProdImage('ac');
   if (!label) { showToast('اكتب اسم القسم', 'err'); return; }
   try {
-    if (id) await updateDoc(doc(db,'categories',id), { label, icon, order });
-    else await addDoc(collection(db,'categories'), { label, icon, order, createdAt: serverTimestamp() });
-    showToast('✅ تم الحفظ', 'ok');
+    if (id) await updateDoc(doc(db,'categories',id), { label, imageUrl, order });
+    else await addDoc(collection(db,'categories'), { label, imageUrl, order, createdAt: serverTimestamp() });
+    showToast('تم الحفظ', 'ok');
     closeModal('add-cat-modal');
   } catch(e) { showToast('حدث خطأ', 'err'); }
 }
 export async function delCat(id) {
-  try { await deleteDoc(doc(db,'categories',id)); showToast('🗑️ تم حذف القسم', 'ok'); }
+  try { await deleteDoc(doc(db,'categories',id)); showToast('تم حذف القسم', 'ok'); }
   catch(e) { showToast('حدث خطأ', 'err'); }
 }
 
@@ -744,8 +746,8 @@ export async function delCat(id) {
 export function renderAdminBanners(items) {
   const list = document.getElementById('adm-banners-list');
   if (!list) return;
-  if (!items.length) { list.innerHTML = '<div class="empty-state" style="padding:16px"><p style="font-size:12px">لا توجد بانرات بعد</p></div>'; return; }
-  list.innerHTML = items.map(b => `<div class="drv-row2"><div class="drv-av2" style="background:#F3F4F6;background-image:url('${esc(b.imageUrl)}');background-size:cover">${b.imageUrl?'':'🖼️'}</div><div class="drv-info2"><strong>${esc(b.title)}</strong><small>ترتيب: ${b.order??0}</small></div><div class="drv-row2-acts"><button class="mb2 mb-view" onclick='editBanner(${JSON.stringify(b).replace(/</g,"\\u003c")})'>تعديل</button><button class="mb2 mb-rej" onclick="delBanner('${b.id}')">حذف</button></div></div>`).join('');
+  if (!items.length) { list.innerHTML = `<div class="empty-state" style="padding:16px"><div class="ei">${icon('image',30)}</div><p style="font-size:12px">لا توجد بانرات بعد</p></div>`; return; }
+  list.innerHTML = items.map(b => `<div class="drv-row2"><div class="drv-av2 drv-av2--photo" style="background-image:url('${esc(b.imageUrl)}');background-size:cover">${b.imageUrl?'':icon('image',20)}</div><div class="drv-info2"><strong>${esc(b.title)}</strong><small>ترتيب: ${b.order??0}</small></div><div class="drv-row2-acts"><button class="mb2 mb-view" onclick='editBanner(${JSON.stringify(b).replace(/</g,"\\u003c")})'>${icon('edit',13)} تعديل</button><button class="mb2 mb-rej" onclick="delBanner('${b.id}')">${icon('trash',13)} حذف</button></div></div>`).join('');
 }
 export async function uploadBannerImg() {
   const box = document.getElementById('ab-img-box');
@@ -754,28 +756,28 @@ export async function uploadBannerImg() {
   inp.onchange = async () => {
     const file = inp.files[0]; if (!file) return;
     if (file.size > 5*1024*1024) { showToast('حجم الصورة كبير جدًا (الحد الأقصى 5 ميجا)','err'); return; }
-    box.innerHTML = `<div class="u-ic">⏳</div><p style="font-size:12px">جارٍ الرفع...</p>`;
+    box.innerHTML = `<div class="u-ic">${icon('loader',22)}</div><p style="font-size:12px">جارٍ الرفع...</p>`;
     try {
       const url = await secureCloudinaryUpload(file);
       document.getElementById('ab-imgurl').value = url;
       box.style.backgroundImage = `url('${url}')`;
       box.style.backgroundSize = 'cover';
-      box.innerHTML = `<div class="u-ic">✅</div><p style="font-size:12px;color:var(--ok)">تم رفع الصورة</p>`;
+      box.innerHTML = `<div class="u-ic" style="color:var(--ok)">${icon('check-circle',22)}</div><p style="font-size:12px;color:var(--ok)">تم رفع الصورة</p>`;
     } catch(e) {
-      box.innerHTML = `<div class="u-ic">📷</div><p style="font-size:12px;color:#E11">فشل الرفع، اضغط للمحاولة تاني</p>`;
+      box.innerHTML = `<div class="u-ic">${icon('camera',22)}</div><p style="font-size:12px;color:#E11">فشل الرفع، اضغط للمحاولة تاني</p>`;
     }
   };
   inp.click();
 }
 export function openAddBanner() {
-  document.getElementById('banner-modal-title').textContent = '➕ إضافة بانر';
+  document.getElementById('banner-modal-title').textContent = 'إضافة بانر';
   ['ab-id','ab-tag','ab-title','ab-desc','ab-order','ab-start','ab-end','ab-imgurl'].forEach(id=>document.getElementById(id).value='');
-  document.getElementById('ab-img-box').innerHTML = `<div class="u-ic">📷</div><p style="font-size:12px">اضغط لرفع صورة</p>`;
+  document.getElementById('ab-img-box').innerHTML = `<div class="u-ic">${icon('camera',22)}</div><p style="font-size:12px">اضغط لرفع صورة</p>`;
   document.getElementById('ab-img-box').style.backgroundImage = '';
   document.getElementById('add-banner-modal').classList.add('open');
 }
 export function editBanner(b) {
-  document.getElementById('banner-modal-title').textContent = '✏️ تعديل بانر';
+  document.getElementById('banner-modal-title').textContent = 'تعديل بانر';
   document.getElementById('ab-id').value = b.id;
   document.getElementById('ab-tag').value = b.tag||'';
   document.getElementById('ab-title').value = b.title||'';
@@ -786,6 +788,7 @@ export function editBanner(b) {
   document.getElementById('ab-imgurl').value = b.imageUrl||'';
   const box = document.getElementById('ab-img-box');
   if (b.imageUrl) { box.style.backgroundImage = `url('${b.imageUrl}')`; box.style.backgroundSize='cover'; box.innerHTML=''; }
+  else { box.style.backgroundImage=''; box.innerHTML = `<div class="u-ic">${icon('camera',22)}</div><p style="font-size:12px">اضغط لرفع صورة</p>`; }
   document.getElementById('add-banner-modal').classList.add('open');
 }
 export async function saveBanner() {
@@ -804,12 +807,12 @@ export async function saveBanner() {
   try {
     if (id) await updateDoc(doc(db,'banners',id), data);
     else await addDoc(collection(db,'banners'), { ...data, createdAt: serverTimestamp() });
-    showToast('✅ تم الحفظ', 'ok');
+    showToast('تم الحفظ', 'ok');
     closeModal('add-banner-modal');
   } catch(e) { showToast('حدث خطأ', 'err'); }
 }
 export async function delBanner(id) {
-  try { await deleteDoc(doc(db,'banners',id)); showToast('🗑️ تم حذف البانر', 'ok'); }
+  try { await deleteDoc(doc(db,'banners',id)); showToast('تم حذف البانر', 'ok'); }
   catch(e) { showToast('حدث خطأ', 'err'); }
 }
 
@@ -818,24 +821,25 @@ export async function delBanner(id) {
 export function renderAdminCoupons(items) {
   const list = document.getElementById('adm-coupons-list');
   if (!list) return;
-  if (!items.length) { list.innerHTML = '<div class="empty-state" style="padding:16px"><p style="font-size:12px">لا توجد قسائم بعد</p></div>'; return; }
-  list.innerHTML = items.map(c => `<div class="drv-row2"><div class="drv-av2" style="background:#F3F4F6">${esc(c.icon)||'🎟️'}</div><div class="drv-info2"><strong>${esc(c.title)} — ${esc(c.code)}</strong><small>${esc(c.badge)} | ترتيب: ${c.order??0}</small></div><div class="drv-row2-acts"><button class="mb2 mb-view" onclick='editCoupon(${JSON.stringify(c).replace(/</g,"\\u003c")})'>تعديل</button><button class="mb2 mb-rej" onclick="delCoupon('${c.id}')">حذف</button></div></div>`).join('');
+  if (!items.length) { list.innerHTML = `<div class="empty-state" style="padding:16px"><div class="ei">${icon('ticket',30)}</div><p style="font-size:12px">لا توجد قسائم بعد</p></div>`; return; }
+  list.innerHTML = items.map(c => `<div class="drv-row2"><div class="drv-av2 drv-av2--photo" style="overflow:hidden">${c.imageUrl ? `<img src="${esc(c.imageUrl)}" alt="${esc(c.title)}" style="width:100%;height:100%;object-fit:cover">` : icon('ticket',20)}</div><div class="drv-info2"><strong>${esc(c.title)} — ${esc(c.code)}</strong><small>${esc(c.badge)} | ترتيب: ${c.order??0}</small></div><div class="drv-row2-acts"><button class="mb2 mb-view" onclick='editCoupon(${JSON.stringify(c).replace(/</g,"\\u003c")})'>${icon('edit',13)} تعديل</button><button class="mb2 mb-rej" onclick="delCoupon('${c.id}')">${icon('trash',13)} حذف</button></div></div>`).join('');
 }
 export function openAddCoupon() {
-  document.getElementById('coupon-modal-title').textContent = '➕ إضافة قسيمة';
-  ['ac2-id','ac2-code','ac2-badge','ac2-icon','ac2-title','ac2-desc','ac2-order','ac2-expiry'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('coupon-modal-title').textContent = 'إضافة قسيمة';
+  ['ac2-id','ac2-code','ac2-badge','ac2-title','ac2-desc','ac2-order','ac2-expiry'].forEach(id=>document.getElementById(id).value='');
+  removeProductImage('ac2');
   document.getElementById('add-coupon-modal').classList.add('open');
 }
 export function editCoupon(c) {
-  document.getElementById('coupon-modal-title').textContent = '✏️ تعديل قسيمة';
+  document.getElementById('coupon-modal-title').textContent = 'تعديل قسيمة';
   document.getElementById('ac2-id').value = c.id;
   document.getElementById('ac2-code').value = c.code||'';
   document.getElementById('ac2-badge').value = c.badge||'';
-  document.getElementById('ac2-icon').value = c.icon||'';
   document.getElementById('ac2-title').value = c.title||'';
   document.getElementById('ac2-desc').value = c.description||'';
   document.getElementById('ac2-order').value = c.order??'';
   document.getElementById('ac2-expiry').value = c.expiryDate||'';
+  if (c.imageUrl) renderProdImgPreview('ac2', c.imageUrl); else removeProductImage('ac2');
   document.getElementById('add-coupon-modal').classList.add('open');
 }
 export async function saveCoupon() {
@@ -846,7 +850,7 @@ export async function saveCoupon() {
   const data = {
     title, code,
     badge: document.getElementById('ac2-badge').value.trim(),
-    icon: document.getElementById('ac2-icon').value.trim(),
+    imageUrl: getPendingProdImage('ac2'),
     description: document.getElementById('ac2-desc').value.trim(),
     order: parseInt(document.getElementById('ac2-order').value) || 0,
     expiryDate: document.getElementById('ac2-expiry').value || null,
@@ -855,12 +859,12 @@ export async function saveCoupon() {
   try {
     if (id) await updateDoc(doc(db,'coupons',id), data);
     else await addDoc(collection(db,'coupons'), { ...data, createdAt: serverTimestamp() });
-    showToast('✅ تم الحفظ', 'ok');
+    showToast('تم الحفظ', 'ok');
     closeModal('add-coupon-modal');
   } catch(e) { showToast('حدث خطأ', 'err'); }
 }
 export async function delCoupon(id) {
-  try { await deleteDoc(doc(db,'coupons',id)); showToast('🗑️ تم حذف القسيمة', 'ok'); }
+  try { await deleteDoc(doc(db,'coupons',id)); showToast('تم حذف القسيمة', 'ok'); }
   catch(e) { showToast('حدث خطأ', 'err'); }
 }
 

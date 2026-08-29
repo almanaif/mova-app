@@ -5,18 +5,19 @@ import { db, auth, doc, getDoc, onAuthStateChanged, getRedirectResult,
          isSignInWithEmailLink, signInWithEmailLink } from './firebase.js';
 import { Logger, initOfflineHandling, callCurrentStore, callStore, closeModal, filterProds, openNotifs, openWA, setLoad, showErr, showScreen, showToast, waCurrentStore } from './utils.js';
 import { markNotifRead, startNotifListener, registerNotificationsResets } from './notifications.js';
-import { initAdminMap, initTrackMap, closeLocationPicker, locPickerConfirm, locPickerUseCurrent, recenterTrackMap, toggleDriverMap, registerMapsResets } from './maps.js';
+import { initAdminMap, initTrackMap, closeLocationPicker, locPickerConfirm, locPickerUseCurrent, locPickerOnSearchInput, locPickerOnCategoryClick, locPickerOnResultClick, recenterTrackMap, toggleDriverMap, registerMapsResets } from './maps.js';
 import { goCheckout, openTrack, registerOrdersResets } from './orders.js';
 import { addCart, chgQty, custCancelOrderUI, custNav, doSearch, filterCat, loadBanners, loadCategories, loadCoupons, loadCustomerData, loadOrders, loadProducts, loadProductsByStore, loadStores, openAnyReq, openCart, openCustomerLocationPicker, quickReq, removeCartItem, renderProds, selMCat, selectRatingTarget, sendAnyReq, setStar, submitMerchant, submitRating, updateCartUI, registerCustomerResets } from './customer.js';
 import { acceptOrd, agreeTermsModal, buildChart, closeTermsModal, closeZoom, dregBack, dregGetLocation, dregInit, dregNext, dregRestart, dregSaveDraft, dregSetExp, drvNav, getLocation, listenNewOrders, loadDriverData, loadDriverOrders, openTermsModal, removeUploadedDoc, startGPS, submitDrvReg, toggleAgree, toggleOnline, updOrdStatus, uploadDoc, zoomDoc, registerDriverResets } from './driver.js';
-import { delProd, loadMerchantData, loadMerchantOrders, loadMerchantProds, merchAcceptOrd, merchCancelOrdUI, merchRejectOrd, openAddProd, openMerchantLocationPicker, saveProd, registerMerchantResets } from './merchant.js';
+import { delProd, loadMerchantData, loadMerchantOrders, loadMerchantProds, merchAcceptOrd, merchCancelOrdUI, merchRejectOrd, openAddProd, openMerchantLocationPicker, saveProd, uploadProductImage, removeProductImage, registerMerchantResets } from './merchant.js';
 import { admAccDrv, admAccStore, admDelProd, admLogoutConfirm, admNav, admRejDrv, admRejStore, admUpdOrd, closeReasonModal, closeStoreManage, confirmReasonModal, delBanner, delCat, delCoupon, editBanner, editCat, editCoupon, filtDrvs, filtOrds, loadAdminData, loadAuditLog, loadMoreDrivers, loadMoreMerchants, loadMoreOrders, logAudit, openAddBanner, openAddCat, openAddCoupon, openDrvModal, openEditProd, openReasonModal, openStoreManage, renderAdminBanners, renderAdminCats, renderAdminCoupons, saveBanner, saveCat, saveComm, savePricingSettings, saveCoupon, saveEditProd, smDeleteCover, smDeleteStore, smQuickActivate, smQuickPause, smSaveProfile, smSetAccountStatus, smSetOpen, smTab, smUploadCover, smUploadLogo, toggleProdAvail, uploadBannerImg, registerAdminResets } from './admin.js';
 import { onCustomerSearchInput, filterCustomersByStatus, loadMoreCustomers, openCustomerDetails, closeCustomerDetails, saveCustomerBasicInfo, toggleCustomerBlock, softDeleteCustomer, loadMoreCustomerOrders, registerCustomerListReset } from './admin-customers.js';
 import { loadMoreMerchantRequests, loadMoreAnyRequests, acceptMerchantRequest, rejectMerchantRequest, addNoteToMerchantRequest, acceptAnyRequest, rejectAnyRequest, addNoteToAnyRequest } from './admin-requests.js';
 import { completeRegistration, doLogin, doLogout, doRegister, firebaseAuthErrorMessage, handleGoogleAccountConflict, hideLoading, loginGoogle, pickEntryType, routeUser, selCMCat, showEmailOTP, showForgot, submitMerchantProfile, switchTab, syncToHubSpot, updateEntryLabel } from './auth.js';
 import { openRideRequest, resetRideRequest, selectRideVehicle, createRideRequest, acceptRideOffer, rejectRideOffer, retryDispatch, handleDriverRideAction, registerRidesResets } from './rides.js';
-import { sendExternalPurchase, retryExternalDispatch, acceptExternalOffer, rejectExternalOffer, handleDriverExternalAction, reportItemUnavailableFromPanel, reportBudgetExceededFromPanel, epCustomerCancel, epCustomerContinue, epCloseStatus, registerExternalResets } from './external.js';
+import { sendExternalPurchase, retryExternalDispatch, acceptExternalOffer, rejectExternalOffer, handleDriverExternalAction, reportItemUnavailableFromPanel, reportBudgetExceededFromPanel, epCustomerCancel, epCustomerContinue, epCloseStatus, epOpenLocationPicker, epCancelAnyReq, registerExternalResets } from './external.js';
 import { renderIcons } from './icons.js';
+import { initLocationPermissionGate } from './location-permission.js';
 
 // MOVA Design System v1.0: يملأ كل عناصر [data-icon] الثابتة في index.html بالـ SVG
 // المناظر من نظام الأيقونات الموحد (بديل الـ Emoji). Presentation فقط — صفر منطق عمل.
@@ -45,7 +46,7 @@ Object.assign(window, {
   callCurrentStore, callStore, closeModal, filterProds, openNotifs, openWA, setLoad, showErr,
   showScreen, showToast, waCurrentStore, markNotifRead, startNotifListener, initAdminMap,
   initTrackMap, recenterTrackMap, toggleDriverMap, goCheckout, openTrack, addCart, chgQty, custNav, doSearch,
-  locPickerConfirm, locPickerUseCurrent, openCustomerLocationPicker, closeLocationPicker,
+  locPickerConfirm, locPickerUseCurrent, locPickerOnSearchInput, locPickerOnCategoryClick, locPickerOnResultClick, openCustomerLocationPicker, closeLocationPicker,
   filterCat, loadBanners, loadCategories, loadCoupons, loadCustomerData, loadOrders,
   loadProducts, loadProductsByStore, loadStores, openAnyReq, openCart, quickReq,
   removeCartItem, renderProds, selMCat, selectRatingTarget, sendAnyReq, setStar,
@@ -54,7 +55,7 @@ Object.assign(window, {
   dregSaveDraft, dregSetExp, drvNav, getLocation, listenNewOrders, loadDriverData,
   loadDriverOrders, openTermsModal, removeUploadedDoc, startGPS, submitDrvReg, toggleAgree,
   toggleOnline, updOrdStatus, uploadDoc, zoomDoc, delProd, loadMerchantData,
-  loadMerchantOrders, loadMerchantProds, merchAcceptOrd, merchCancelOrdUI, merchRejectOrd, openAddProd, openMerchantLocationPicker, saveProd, admAccDrv,
+  loadMerchantOrders, loadMerchantProds, merchAcceptOrd, merchCancelOrdUI, merchRejectOrd, openAddProd, openMerchantLocationPicker, saveProd, uploadProductImage, removeProductImage, admAccDrv,
   admAccStore, admDelProd, admLogoutConfirm, admNav, admRejDrv, admRejStore, admUpdOrd,
   closeReasonModal, closeStoreManage, confirmReasonModal, delBanner, delCat, delCoupon,
   editBanner, editCat, editCoupon, filtDrvs, filtOrds, loadAdminData, loadAuditLog, loadMoreCustomers, loadMoreDrivers, loadMoreMerchants, loadMoreOrders, logAudit, onCustomerSearchInput, filterCustomersByStatus, openCustomerDetails, closeCustomerDetails, saveCustomerBasicInfo, toggleCustomerBlock, softDeleteCustomer, loadMoreCustomerOrders, loadMoreMerchantRequests, loadMoreAnyRequests, acceptMerchantRequest, rejectMerchantRequest, addNoteToMerchantRequest, acceptAnyRequest, rejectAnyRequest, addNoteToAnyRequest,
@@ -68,7 +69,7 @@ Object.assign(window, {
   acceptRideOffer, rejectRideOffer, retryDispatch, handleDriverRideAction,
   sendExternalPurchase, retryExternalDispatch, acceptExternalOffer, rejectExternalOffer,
   handleDriverExternalAction, reportItemUnavailableFromPanel, reportBudgetExceededFromPanel,
-  epCustomerCancel, epCustomerContinue, epCloseStatus
+  epCustomerCancel, epCustomerContinue, epCloseStatus, epOpenLocationPicker, epCancelAnyReq
 });
 
 // ===== PWA =====
@@ -110,6 +111,11 @@ if (isSignInWithEmailLink(auth, window.location.href)) {
 }
 
 initOfflineHandling();
+
+// Phase 2A: بوابة شرح إذن الموقع عند أول فتح للتطبيق - مستقلة تمامًا عن تسجيل الدخول/الدور،
+// عشان تتماشى مع نفس الترتيب المطلوب (فتح التطبيق ← فحص الإذن ← شرح لو محتاج) من غير ما تلمس
+// أي حاجة في auth.js أو منطق التوجيه حسب الدور.
+initLocationPermissionGate();
 
 onAuthStateChanged(auth, async user => {
   if (user) {

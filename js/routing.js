@@ -126,3 +126,141 @@ export async function reverseGeocode(lat, lng) {
     return { address: null, city: null, zone: null }; // فشل تحديد العنوان النصي - الموقع الجغرافي هيتحفظ برضه
   }
 }
+
+// =====================================================================================
+// PLACE / ADDRESS SEARCH (Phase 2B - وضع A) — Nominatim Forward Geocoding
+// =====================================================================================
+// ===== المزوّدات المستخدمة في وضعي البحث تحت (Phase 2B) - نفس نمط التوثيق فوق لـ OSRM =====
+// Nominatim: instance عام (nominatim.openstreetmap.org) - مفيش SLA مضمون، خاضع لحد استخدام
+// معلن (usage policy) قد يتغير أو يتشدد من غير إخطار. لسه مقبول للمرحلة دي (مصرّح صراحة في
+// Phase 2B)، بس موثّق هنا عشان أي قرار مستقبلي بالانتقال لـ Self-Hosted يبقى واضح مصدره.
+const NOMINATIM_PROVIDER_NAME = 'nominatim-public-instance';
+// نفس المزوّد المستخدم بالفعل لـ reverseGeocode (اتجاه عكسي بس) - صفر Dependency جديدة.
+// بترمي Error عند timeout/network-failure عشان الطرف المستدعي (maps.js) يقرر رسالة الخطأ
+// المناسبة للمستخدم (البند 3-A و11 - صفر كسر للـ picker لو Nominatim فشل).
+const GEOCODE_TIMEOUT_MS = 8000;
+export async function searchPlaces(queryText, biasLoc) {
+  const q = (queryText || '').trim();
+  if (q.length < 2) return [];
+  let url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(q)}&accept-language=ar&limit=8&countrycodes=eg`;
+  // Bias بسيط لصالح منطقة الخريطة الحالية (viewbox غير ملزم - bounded=0 يسيب نتائج برا المنطقة
+  // كمان لو محتاجة، بس بيرتبها الأقرب أولًا) - مفيدة لما المستخدم يدور على اسم مكان محلي قصير.
+  if (biasLoc && typeof biasLoc.lat === 'number' && typeof biasLoc.lng === 'number') {
+    const d = 0.15; // ~16 كم تقريبًا - نطاق تحيّز معقول من غير ما يقفل نتائج أبعد فعلاً مقصودة
+    url += `&viewbox=${biasLoc.lng - d},${biasLoc.lat + d},${biasLoc.lng + d},${biasLoc.lat - d}`;
+  }
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GEOCODE_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(url, { signal: controller.signal });
+  } catch (e) {
+    clearTimeout(timeoutId);
+    throw new Error('search-failed: ' + (e.name === 'AbortError' ? 'timeout' : (e.message || 'network-error')));
+  }
+  clearTimeout(timeoutId);
+  if (!res.ok) throw new Error('search-failed: http-' + res.status);
+  const data = await res.json();
+  if (!Array.isArray(data)) return [];
+  return data.map(d => ({
+    label: d.display_name || q,
+    lat: Number(d.lat), lng: Number(d.lon),
+  })).filter(r => Number.isFinite(r.lat) && Number.isFinite(r.lng));
+}
+
+// أداة البحث الصحيحة للبحث بالفئة ("كل الصيدليات القريبة") - نفس منظومة OSM المستخدمة بالفعل
+// (نفس بيانات الخريطة المعروضة أصلًا)، صفر Provider جديد. بحث حول نقطة بنطاق محدود (متر) -
+// مش استعلام على العالم كله (البند 3-B صراحة).
+// Overpass: instance عام (overpass-api.de) - نفس ملحوظة عدم ضمان SLA فوق بالظبط، مفيش تعديل
+// على الـ Headers أو محاولة تجاوز أي حد استخدام (Hardening Pass - البند 8: صفر Headers مزيّفة).
+const OVERPASS_PROVIDER_NAME = 'overpass-public-instance';
+const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+const OVERPASS_TIMEOUT_MS = 10000;
+const POI_SEARCH_RADIUS_M = 2000; // نطاق معقول لتطبيق توصيل محلي - مش استعلام عالمي
+const POI_RESULT_LIMIT = 25;
+
+// تطبيع تصنيفات OSM لأسماء عربية مفهومة للمستخدم (البند 3-B - Example mapping بالحرف)
+export const POI_CATEGORIES = [
+  { id: 'pharmacy', label: 'صيدليات', singular: 'صيدلية', filter: '["amenity"="pharmacy"]' },
+  { id: 'mosque', label: 'مساجد', singular: 'مسجد', filter: '["amenity"="place_of_worship"]["religion"="muslim"]' },
+  { id: 'supermarket', label: 'سوبر ماركت', singular: 'سوبر ماركت', filter: '["shop"="supermarket"]' },
+  { id: 'restaurant', label: 'مطاعم', singular: 'مطعم', filter: '["amenity"="restaurant"]' },
+  { id: 'hospital', label: 'مستشفيات', singular: 'مستشفى', filter: '["amenity"="hospital"]' },
+  { id: 'clinic', label: 'عيادات', singular: 'عيادة', filter: '["amenity"="clinic"]' },
+  { id: 'school', label: 'مدارس', singular: 'مدرسة', filter: '["amenity"="school"]' },
+  { id: 'fuel', label: 'محطات بنزين', singular: 'محطة بنزين', filter: '["amenity"="fuel"]' },
+  { id: 'shop', label: 'متاجر', singular: 'متجر', filter: '["shop"]' },
+];
+
+function poiCategoryById(id) { return POI_CATEGORIES.find(c => c.id === id) || null; }
+
+function poiAddressFromTags(tags) {
+  const parts = [tags['addr:street'], tags['addr:housenumber']].filter(Boolean);
+  return parts.length ? parts.join(' ') : (tags['addr:city'] || null);
+}
+
+// ===== Hardening Pass (Cache + De-dup) - البند 2 =====
+// كاش بسيط في الذاكرة (نفس نمط _routeCache فوق بالظبط - صفر Firestore/localStorage) + منع
+// طلبات مكررة لنفس الفئة/المنطقة وهي لسه شغالة. مفتاح الكاش = الفئة + مركز الخريطة مقرّب لأقرب
+// ~100م (مش دقة كاملة - "لم تتحرك الخريطة بشكل ملموس" زي ما اتطلب بالحرف، مش نفس النقطة تمامًا).
+const _poiCache = new Map();      // key -> { at: timestamp, data: [...] }
+const _poiInFlight = new Map();   // key -> Promise (لطلب لسه شغال لنفس المفتاح)
+const POI_CACHE_TTL_MS = 2 * 60 * 1000; // دقيقتين - كفاية لضغطات متكررة على نفس الفئة، مش طويلة لدرجة عرض بيانات قديمة فعليًا
+const POI_CACHE_COORD_PRECISION = 3; // ~110م دقة تقريب - "لم تتحرك الخريطة بشكل ملموس"
+
+function _poiCacheKey(categoryId, lat, lng) {
+  const r = (n) => Number(n).toFixed(POI_CACHE_COORD_PRECISION);
+  return `${categoryId}|${r(lat)},${r(lng)}`;
+}
+
+// بترجع [] لو مفيش نتائج (حالة "Empty" منفصلة عن "Error" - البند 11)، وبترمي Error عند
+// timeout/network/http failure عشان maps.js يعرض رسالة "تعذر تحميل الأماكن القريبة..." بالظبط.
+// Hardening Pass (البند 1): node و way مع بعض (مش node بس) - أماكن كتير في OSM متمثّلة كـ
+// way (مبنى بمساحة) مش node واحدة، خصوصًا مستشفيات/مدارس كبيرة. "out center" بيديّنا نقطة
+// مركزية للـ way نستخدمها زي أي نتيجة عادية من غير تعقيد إضافي (صفر Relation geometry - مش
+// محتاجينها هنا فعليًا).
+export async function searchPOICategory(categoryId, lat, lng) {
+  const cat = poiCategoryById(categoryId);
+  if (!cat || typeof lat !== 'number' || typeof lng !== 'number') return [];
+
+  const key = _poiCacheKey(categoryId, lat, lng);
+  const cached = _poiCache.get(key);
+  if (cached && (Date.now() - cached.at) < POI_CACHE_TTL_MS) return cached.data; // نفس الفئة + نفس المنطقة تقريبًا - إعادة استخدام
+  if (_poiInFlight.has(key)) return _poiInFlight.get(key); // طلب شغال بالفعل لنفس المفتاح - منضاعفش الطلب
+
+  const reqPromise = (async () => {
+    const ql = `[out:json][timeout:${Math.floor(OVERPASS_TIMEOUT_MS / 1000)}];(node${cat.filter}(around:${POI_SEARCH_RADIUS_M},${lat},${lng});way${cat.filter}(around:${POI_SEARCH_RADIUS_M},${lat},${lng}););out center tags ${POI_RESULT_LIMIT};`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), OVERPASS_TIMEOUT_MS);
+    let res;
+    try {
+      res = await fetch(OVERPASS_URL, { method: 'POST', body: 'data=' + encodeURIComponent(ql), signal: controller.signal });
+    } catch (e) {
+      clearTimeout(timeoutId);
+      throw new Error('poi-search-failed: ' + (e.name === 'AbortError' ? 'timeout' : (e.message || 'network-error')));
+    }
+    clearTimeout(timeoutId);
+    if (!res.ok) throw new Error('poi-search-failed: http-' + res.status);
+    const data = await res.json();
+    if (!Array.isArray(data.elements)) return [];
+    const results = data.elements.map(el => {
+      const tags = el.tags || {};
+      // node: el.lat/el.lon مباشرة. way: النقطة الفعلية في el.center (بسبب "out center") - مفيش lat/lon على مستوى الـ element نفسه لـ way.
+      const elLat = el.type === 'way' ? el.center?.lat : el.lat;
+      const elLng = el.type === 'way' ? el.center?.lon : el.lon;
+      return {
+        id: `osm-${el.type}-${el.id}`,
+        name: tags.name || tags['name:ar'] || (cat.singular + ' قريبة'), // Fallback مفيد بدل ما نعرض OSM tags خام (البند 4)
+        category: cat.singular,
+        address: poiAddressFromTags(tags),
+        lat: elLat, lng: elLng,
+      };
+    }).filter(r => Number.isFinite(r.lat) && Number.isFinite(r.lng));
+    _poiCache.set(key, { at: Date.now(), data: results });
+    return results;
+  })();
+
+  _poiInFlight.set(key, reqPromise);
+  try { return await reqPromise; }
+  finally { _poiInFlight.delete(key); }
+}

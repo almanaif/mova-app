@@ -6,7 +6,8 @@
 
 import { DEFAULT_LOC, STORE_LOC, db, doc } from './firebase.js';
 import { onListenersCleared, onSnapshot, showToast } from './utils.js';
-import { decodePolyline, getRoute, reverseGeocode } from './routing.js';
+import { decodePolyline, getRoute, reverseGeocode, searchPlaces, searchPOICategory, POI_CATEGORIES } from './routing.js';
+import { renderIcons } from './icons.js';
 
 // ===== OpenFreeMap Style (الـ Style الرسمي - liberty) =====
 export const OPENFREEMAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
@@ -15,15 +16,27 @@ export const OPENFREEMAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
 // من غير الـ plugin ده، حروف العربي (والعبري) بتتعرض مفككة/بترتيب غلط على labels الخريطة.
 // ده الحل الرسمي الموثّق من MapLibre نفسه - بيتسجل مرة واحدة بس لكل الخريطة، وبيشتغل مع أي
 // خريطة يتعمل لها init بعد كده تلقائيًا. صفر قلب نصوص يدوي، صفر تعديل على أي string في المشروع.
-// lazy:true يعني الـ plugin نفسه (سكريبت خارجي صغير) يتحمّل بس أول لحظة يحتاج فيها الـ style
-// نص RTL فعلي - مفيش تكلفة تحميل إضافية لو مفيش نصوص عربي على الـ style أصلاً.
+// الـ plugin (سكريبت خارجي صغير) بيتحمّل فورًا (lazy:false) بدل الانتظار لحد أول نص RTL،
+// عشان نضمن جاهزيته قبل رسم أي label عربي - يقفل احتمال ظهور النص مفكك أول مرة.
+// ملحوظة إصلاح (Phase 2A): الرابط القديم كان ناقص /dist/ (يعني بيطلب ملف مش موجود فعليًا في
+// الباكدج على unpkg) ومثبّت على نسخة 0.3.0 اللي ليها مشكلة توثّق فشل تسجيل معروفة في بعض
+// سياقات التحميل. النسخة 0.4.0 هي نفسها اللي مشروع OpenStreetMap.org الرسمي مستخدمها حاليًا
+// مع نفس major version بتاع maplibre-gl (5.x) اللي المشروع ده شغّال بيه.
+const RTL_PLUGIN_URL = 'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.4.0/dist/mapbox-gl-rtl-text.js';
+
 function registerArabicRtlPlugin() {
   try {
     if (typeof maplibregl === 'undefined') return false;
-    if (maplibregl.getRTLTextPluginStatus && maplibregl.getRTLTextPluginStatus() !== 'unavailable') return true; // متسجل بالفعل - منع Duplicate registration
+    // الحالات الممكنة: 'unavailable' (لسه مسجّلش)، 'loading'، 'loaded'، 'error'.
+    // القديم كان بيعتبر أي حاجة غير 'unavailable' = "متسجل بنجاح" وده غلط: لو الحالة 'error'
+    // (يعني آخر محاولة فشلت) لازم نعيد المحاولة، مش نسيبها زي ما هي بصمت للأبد.
+    const status = maplibregl.getRTLTextPluginStatus ? maplibregl.getRTLTextPluginStatus() : 'unavailable';
+    if (status === 'loading' || status === 'loaded') return true; // فعلاً بيتحمّل أو خلص - منع Duplicate registration
     maplibregl.setRTLTextPlugin(
-      'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.3.0/mapbox-gl-rtl-text.js',
-      true // lazy load
+      RTL_PLUGIN_URL,
+      false // eager load: تحميل فوري بدل الانتظار لحد أول نص RTL، عشان نضمن جاهزية الـ plugin
+            // قبل رسم أي label عربي على الخريطة (بيقفل احتمال الـ race اللي كان يسبب النص
+            // يظهر مفكك لو أول Arabic label اتعرض قبل ما الـ plugin يخلص تحميل)
     );
     return true;
   } catch (e) {
@@ -32,8 +45,8 @@ function registerArabicRtlPlugin() {
   }
 }
 // محاولة فورية وقت تحميل الموديول (المتوقع إن maplibregl يبقى متاح وقتها، زي باقي كود الملف).
-// لو لأي سبب (توقيت تحميل السكريبتات) لسه مش متاح، بنجرب تاني مرة واحدة عند اكتمال تحميل
-// الصفحة - Safety net بسيط بدون أي polling أو تكرار غير محدود.
+// لو لأي سبب (توقيت تحميل السكريبتات) لسه مش متاح، أو لو المحاولة الأولى فشلت (status 'error'),
+// بنجرب تاني عند اكتمال تحميل الصفحة - Safety net بسيط بدون أي polling أو تكرار غير محدود.
 if (!registerArabicRtlPlugin()) {
   window.addEventListener('load', () => registerArabicRtlPlugin(), { once: true });
 }
@@ -135,9 +148,29 @@ function fitToPoints(map, pts) {
   map.fitBounds(bounds, { padding: 60, maxZoom: 16, duration: 0 });
 }
 
+// مسافة تقريبية (Haversine) لعرض "350 م" جنب نتيجة بحث POI بس - مش Routing حقيقي ومش بديل
+// لـ getRoute()/OSRM؛ استخدام عرض فقط (البند 4 - Distance from current/selected point).
+function haversineMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000, toRad = (d) => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+function formatDistanceLabel(m) {
+  if (!Number.isFinite(m)) return '';
+  return m < 1000 ? `${Math.round(m)} م` : `${(m / 1000).toFixed(1)} كم`;
+}
+// Debounce بسيط (البند 3-A: 500-800ms، وبند 12 - منع طلب لكل ضغطة زرار)
+function debounce(fn, wait) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
+}
+
 // =====================================================================================
 // ===== LOCATION PICKER (Map Sprint - شاشة واحدة مشتركة، تستخدمها شاشة الشيك أوت للعميل
 // وشاشة موقع المتجر للتاجر - بدل ما نعمل نسختين متطابقتين) =====
+// Phase 2B: إضافة بحث بالعنوان (Nominatim) + بحث بالفئة/POI (Overpass) - نفس الـ picker،
+// نفس الـ Confirm Flow (اختيار نتيجة = Preview بس، لسه لازم "تأكيد الموقع" صريح - البند 2).
 // =====================================================================================
 let locPickerMap = null;
 let locPickerCurrentLoc = null; // آخر مركز فعلي للخريطة أثناء التحريك (بيتحدث في moveend)
@@ -145,15 +178,160 @@ let locPickerGeocodeSeq = 0;    // Race Guard: تحريك سريع متتالي 
 let locPickerOnConfirm = null;  // callback({lat,lng,address}) بيتنده بس لما المستخدم يضغط "تأكيد"
 
 let locPickerLastGeo = null;    // {address, city, zone} - آخر نتيجة reverseGeocode فعلية (Race-Guard-safe) لتمريرها كاملة عند التأكيد
+let locPickerSearchSeq = 0;     // Race Guard منفصل لبحث العنوان (Search A/B - البند 12: نتيجة A متكتبش فوق B)
+let locPickerCategorySeq = 0;   // Race Guard منفصل لبحث الفئة/POI (مستقل عن بحث العنوان)
+
+// ===== عرض العنوان بشكل واضح ومنظّم (البند 7) - صفر JSON خام، صفر OSM tags للمستخدم =====
+function locPickerRenderAddress(state, geo) {
+  const addrEl = document.getElementById('loc-picker-addr');
+  if (!addrEl) return;
+  if (state === 'loading') {
+    addrEl.innerHTML = `<div class="loc-picker-addr-line loc-picker-addr-loading">جاري تحديد العنوان...</div>`;
+    return;
+  }
+  if (state === 'error' || !geo || !geo.address) {
+    addrEl.innerHTML = `<div class="loc-picker-addr-line">📍 تم تحديد الموقع على الخريطة</div>`;
+    return;
+  }
+  let html = `<div class="loc-picker-addr-line loc-picker-addr-main">📍 ${geo.address}</div>`;
+  if (geo.city) html += `<div class="loc-picker-addr-sub">المدينة: ${geo.city}</div>`;
+  if (geo.zone) html += `<div class="loc-picker-addr-sub">المنطقة: ${geo.zone}</div>`;
+  addrEl.innerHTML = html;
+}
 
 function locPickerUpdateAddress(lat, lng) {
-  const addrEl = document.getElementById('loc-picker-addr');
-  if (addrEl) addrEl.textContent = 'جاري تحديد العنوان...';
+  locPickerRenderAddress('loading');
   const mySeq = ++locPickerGeocodeSeq;
   reverseGeocode(lat, lng).then(geo => {
-    if (mySeq !== locPickerGeocodeSeq || !addrEl) return; // رد قديم من تحريك سابق - نتجاهله
+    if (mySeq !== locPickerGeocodeSeq) return; // رد قديم من تحريك سابق - نتجاهله
     locPickerLastGeo = geo;
-    addrEl.textContent = geo.address || `${lat.toFixed(5)}, ${lng.toFixed(5)} (تعذر تحديد اسم العنوان)`;
+    locPickerRenderAddress(geo.address ? 'ok' : 'error', geo);
+  });
+}
+
+// ===== نتائج البحث (مشتركة بين وضع العنوان ووضع الفئة - نفس الـ UI، مصدر بيانات مختلف) =====
+function locPickerResultsEl() { return document.getElementById('loc-picker-results'); }
+function locPickerSetResultsState(state, html) {
+  const el = locPickerResultsEl();
+  if (!el) return;
+  el.dataset.state = state;
+  el.innerHTML = html || '';
+  el.style.display = state === 'idle' ? 'none' : 'block';
+}
+function escText(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+
+function locPickerRenderPlaceResults(results, centerLoc) {
+  if (!results.length) { locPickerSetResultsState('empty', `<div class="loc-picker-result-msg">لا توجد نتائج مطابقة</div>`); return; }
+  const withDist = results.map(r => ({
+    ...r,
+    distanceMeters: centerLoc ? haversineMeters(centerLoc[0], centerLoc[1], r.lat, r.lng) : null,
+  }));
+  const html = withDist.map((r, i) => `
+    <button type="button" class="loc-picker-result-row" data-idx="${i}" data-kind="place">
+      <span data-icon="map-pin" data-size="16"></span>
+      <span class="loc-picker-result-txt">
+        <span class="loc-picker-result-name">${escText(r.label)}</span>
+        ${Number.isFinite(r.distanceMeters) ? `<span class="loc-picker-result-meta">${formatDistanceLabel(r.distanceMeters)}</span>` : ''}
+      </span>
+    </button>`).join('');
+  locPickerSetResultsState('ok', html);
+  window._locPickerLastPlaceResults = withDist;
+  renderIcons();
+}
+function locPickerRenderPoiResults(results, centerLoc) {
+  if (!results.length) {
+    locPickerSetResultsState('empty', `<div class="loc-picker-result-msg">لا توجد نتائج قريبة في هذه الفئة</div>`);
+    return;
+  }
+  const withDist = results.map(r => ({ ...r, distanceMeters: haversineMeters(centerLoc[0], centerLoc[1], r.lat, r.lng) }))
+    .sort((a, b) => a.distanceMeters - b.distanceMeters);
+  const html = withDist.map((r, i) => `
+    <button type="button" class="loc-picker-result-row" data-idx="${i}" data-kind="poi">
+      <span data-icon="map-pin" data-size="16"></span>
+      <span class="loc-picker-result-txt">
+        <span class="loc-picker-result-name">${escText(r.name)}</span>
+        <span class="loc-picker-result-meta">${escText(r.category)} · ${formatDistanceLabel(r.distanceMeters)}${r.address ? ' · ' + escText(r.address) : ''}</span>
+      </span>
+    </button>`).join('');
+  locPickerSetResultsState('ok', html);
+  window._locPickerLastPoiResults = withDist;
+  renderIcons();
+}
+
+// اختيار نتيجة (عنوان أو POI) = Preview بس - بتحرك الخريطة وتحدّث العنوان زي أي تحريك يدوي
+// عادي، بس لسه لازم "تأكيد الموقع" صريح (البند 2 IMPORTANT + البند 4 - Do not silently commit).
+function locPickerPickResult(kind, idx) {
+  const list = kind === 'poi' ? window._locPickerLastPoiResults : window._locPickerLastPlaceResults;
+  const r = list && list[idx];
+  if (!r || !locPickerMap) return;
+  locPickerMap.flyTo({ center: [r.lng, r.lat], zoom: 17 });
+  locPickerSetResultsState('idle');
+  const si = document.getElementById('loc-picker-search-inp'); if (si) si.value = '';
+}
+
+// ===== بحث بالعنوان (وضع A) - Debounce + Race Guard + حالات فشل واضحة (البند 3-A) =====
+async function locPickerRunPlaceSearch(text) {
+  const q = (text || '').trim();
+  if (q.length < 2) { locPickerSetResultsState('idle'); return; }
+  locPickerSetResultsState('loading', `<div class="loc-picker-result-msg">جاري البحث...</div>`);
+  const mySeq = ++locPickerSearchSeq;
+  try {
+    const results = await searchPlaces(q, locPickerCurrentLoc ? { lat: locPickerCurrentLoc[0], lng: locPickerCurrentLoc[1] } : null);
+    if (mySeq !== locPickerSearchSeq) return; // نتيجة بحث قديمة (المستخدم كتب حاجة تانية) - اتجاهلت
+    locPickerRenderPlaceResults(results, locPickerCurrentLoc);
+  } catch (e) {
+    if (mySeq !== locPickerSearchSeq) return;
+    locPickerSetResultsState('error', `<div class="loc-picker-result-msg loc-picker-result-err">تعذر البحث، تأكد من الاتصال وحاول مرة أخرى.</div>`);
+  }
+}
+const locPickerDebouncedSearch = debounce(locPickerRunPlaceSearch, 600);
+
+// ===== بحث بالفئة/POI (وضع B) - حول مركز الخريطة الحالي (البند 3-B: نطاق محدود مش العالم كله) =====
+async function locPickerRunCategorySearch(categoryId) {
+  if (!locPickerCurrentLoc) return;
+  const [lat, lng] = locPickerCurrentLoc;
+  locPickerSetResultsState('loading', `<div class="loc-picker-result-msg">جاري البحث عن أماكن قريبة...</div>`);
+  const mySeq = ++locPickerCategorySeq;
+  try {
+    const results = await searchPOICategory(categoryId, lat, lng);
+    if (mySeq !== locPickerCategorySeq) return;
+    locPickerRenderPoiResults(results, [lat, lng]);
+  } catch (e) {
+    if (mySeq !== locPickerCategorySeq) return;
+    // رسالة الفشل المطلوبة بالحرف (البند 11)
+    locPickerSetResultsState('error', `<div class="loc-picker-result-msg loc-picker-result-err">تعذر تحميل الأماكن القريبة، يمكنك تحديد الموقع يدويًا من الخريطة.</div>`);
+  }
+}
+
+// بتتنده من index.html (input/click handlers) - Wiring خفيف بس، المنطق الفعلي فوق
+export function locPickerOnSearchInput(value) { locPickerDebouncedSearch(value); }
+export function locPickerOnCategoryClick(categoryId) { locPickerRunCategorySearch(categoryId); }
+export function locPickerOnResultClick(el) {
+  if (!el) return;
+  locPickerPickResult(el.dataset.kind, Number(el.dataset.idx));
+}
+
+function locPickerBuildCategoryChips() {
+  const wrap = document.getElementById('loc-picker-categories');
+  if (!wrap || wrap.childElementCount) return; // اتبنت قبل كده - مفيش داعي نكررها كل ما الـ picker يتفتح
+  wrap.innerHTML = POI_CATEGORIES.map(c =>
+    `<button type="button" class="loc-picker-chip" onclick="locPickerOnCategoryClick('${c.id}')">${c.label}</button>`
+  ).join('');
+}
+
+// الـ modal نفسه Static في index.html (مبيتبنيش من الصفر كل مرة زي الخريطة) - فربط الـ
+// Listeners على input البحث وقائمة النتائج لازم يحصل مرة واحدة بس، وإلا كل فتح للـ picker
+// هيضيف Listener جديد فوق القديم (تكرار طلبات/تكرار تنفيذ). العلم ده بيضمن ده.
+let locPickerStaticWired = false;
+function locPickerWireStaticOnce() {
+  if (locPickerStaticWired) return;
+  locPickerStaticWired = true;
+  const input = document.getElementById('loc-picker-search-inp');
+  if (input) input.addEventListener('input', (e) => locPickerOnSearchInput(e.target.value));
+  const results = locPickerResultsEl();
+  if (results) results.addEventListener('click', (e) => {
+    const row = e.target.closest('.loc-picker-result-row');
+    if (row) locPickerOnResultClick(row);
   });
 }
 
@@ -167,6 +345,10 @@ export function openLocationPicker(opts = {}) {
   const start = opts.initialLoc || (window.userLat ? [window.userLat, window.userLng] : STORE_LOC);
   locPickerCurrentLoc = start;
   locPickerLastGeo = null;
+  locPickerBuildCategoryChips();
+  locPickerWireStaticOnce();
+  locPickerSetResultsState('idle');
+  const si = document.getElementById('loc-picker-search-inp'); if (si) si.value = '';
   if (locPickerMap) { locPickerMap.remove(); locPickerMap = null; }
   locPickerMap = new maplibregl.Map({
     container: 'loc-picker-map', style: OPENFREEMAP_STYLE,

@@ -50,6 +50,19 @@ const PATHS = {
   loader: '<path d="M12 3v3"/><path d="m18.4 5.6-2.1 2.1"/><path d="M21 12h-3"/><path d="m18.4 18.4-2.1-2.1"/><path d="M12 21v-3"/><path d="m5.6 18.4 2.1-2.1"/><path d="M3 12h3"/><path d="m5.6 5.6 2.1 2.1"/>',
   'message-circle': '<path d="M7.5 17.5 4 21l.9-4.2A8.5 8.5 0 1 1 9 20.4Z"/>',
   trash: '<path d="M4 7h16"/><path d="M9 7V4.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7"/><path d="M6 7l1 13a1.5 1.5 0 0 0 1.5 1.4h7a1.5 1.5 0 0 0 1.5-1.4L18 7"/><path d="M10 11v6"/><path d="M14 11v6"/>',
+  // ===== إضافات Phase: Driver/Merchant Icon Polish — نفس الأسلوب بالظبط (outline, stroke-width=2, viewBox 24x24) =====
+  calendar: '<rect x="3.5" y="5" width="17" height="15.5" rx="1.5"/><path d="M3.5 9.5h17"/><path d="M8 3v4"/><path d="M16 3v4"/>',
+  tag: '<rect x="2.5" y="7" width="19" height="10" rx="2"/><path d="M8 7v10"/>',
+  camera: '<path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2l1-2h7l1 2h2A1.5 1.5 0 0 1 20 8.5v9A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5Z"/><circle cx="12" cy="13" r="3.5"/>',
+  refresh: '<path d="M20 12a8 8 0 0 0-14.5-4.5L3 10"/><path d="M3 4v6h6"/><path d="M4 12a8 8 0 0 0 14.5 4.5L21 14"/><path d="M21 20v-6h-6"/>',
+  edit: '<path d="M17.5 3.5a2.1 2.1 0 0 1 3 3L8 19 4 20l1-4Z"/><path d="M14.5 6.5 17.5 9.5"/>',
+  shield: '<path d="M12 3 19 6v5.5c0 5-3 8.5-7 9.5-4-1-7-4.5-7-9.5V6Z"/>',
+  'id-card': '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="11.5" r="2"/><path d="M13 10h5"/><path d="M13 13h5"/><path d="M5.5 17c.6-2 2-3 3-3s2.4 1 3 3"/>',
+  'x-circle': '<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6"/><path d="m15 9-6 6"/>',
+  check: '<path d="m4 12.5 5.5 5.5L20 6.5"/>',
+  pause: '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
+  play: '<path d="M7 4.5v15a1 1 0 0 0 1.5.87l12-7.5a1 1 0 0 0 0-1.74l-12-7.5A1 1 0 0 0 7 4.5Z"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
 };
 
 /**

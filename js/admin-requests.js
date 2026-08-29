@@ -6,6 +6,7 @@
 
 import { collection, db, doc, orderBy, query, updateDoc } from './firebase.js';
 import { esc, showToast } from './utils.js';
+import { icon } from './icons.js';
 import { createPaginatedListener } from './admin-pagination.js';
 import { logAudit } from './admin.js';
 
@@ -18,21 +19,21 @@ function fmtDate(ts) {
 }
 
 function statusBadge(status) {
-  if (status === 'accepted') return '<span style="color:var(--ok);font-size:10px;font-weight:700">✅ مقبول</span>';
-  if (status === 'rejected') return '<span style="color:var(--danger);font-size:10px;font-weight:700">❌ مرفوض</span>';
-  return '<span style="color:var(--warn);font-size:10px;font-weight:700">⏳ بانتظار المراجعة</span>';
+  if (status === 'accepted') return `<span class="status status--success">${icon('check-circle',11)} مقبول</span>`;
+  if (status === 'rejected') return `<span class="status status--danger">${icon('x-circle',11)} مرفوض</span>`;
+  return `<span class="status status--pending">${icon('clock',11)} بانتظار المراجعة</span>`;
 }
 
 // ===== طلبات انضمام التجار (merchant_requests) =====
 function merchReqRow(r) {
   return `<div class="drv-row2" style="display:block;padding:10px 0">
     <div style="display:flex;justify-content:space-between;margin-bottom:4px"><strong>${esc(r.storeName)||'--'}</strong>${statusBadge(r.status)}</div>
-    <div style="font-size:12px;color:var(--mu)">📱 ${esc(r.phone)||'--'} ${r.address?('| 📍 '+esc(r.address)):''}</div>
-    <div style="font-size:10px;color:var(--mu);margin-top:2px">🕐 ${fmtDate(r.createdAt)}</div>
-    ${r.adminNote ? `<div style="font-size:11px;color:var(--p);margin-top:4px">📝 ${esc(r.adminNote)}</div>` : ''}
+    <div style="font-size:12px;color:var(--mu);display:flex;align-items:center;gap:3px">${icon('phone',12)} ${esc(r.phone)||'--'} ${r.address?('| '+icon('map-pin',12)+' '+esc(r.address)):''}</div>
+    <div style="font-size:10px;color:var(--mu);margin-top:2px;display:flex;align-items:center;gap:3px">${icon('clock',10)} ${fmtDate(r.createdAt)}</div>
+    ${r.adminNote ? `<div style="font-size:11px;color:var(--p);margin-top:4px;display:flex;align-items:center;gap:3px">${icon('file-text',11)} ${esc(r.adminNote)}</div>` : ''}
     <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
       ${r.status==='pending' ? `<button class="mb2 mb-acc" onclick="acceptMerchantRequest('${r.id}')">قبول</button><button class="mb2 mb-rej" onclick="rejectMerchantRequest('${r.id}')">رفض</button>` : ''}
-      <button class="mb2 mb-view" onclick="addNoteToMerchantRequest('${r.id}')">📝 ملاحظة</button>
+      <button class="mb2 mb-view" onclick="addNoteToMerchantRequest('${r.id}')">${icon('file-text',12)} ملاحظة</button>
     </div>
   </div>`;
 }
@@ -58,7 +59,7 @@ export async function acceptMerchantRequest(id) {
   try {
     await updateDoc(doc(db,'merchant_requests',id), { status: 'accepted' });
     logAudit('قبول طلب انضمام تاجر', id);
-    showToast('✅ تم قبول الطلب', 'ok');
+    showToast('تم قبول الطلب', 'ok');
   } catch (e) { showToast('حدث خطأ', 'err'); console.error('[acceptMerchantRequest]', e); }
 }
 export async function rejectMerchantRequest(id) {
@@ -74,7 +75,7 @@ export async function addNoteToMerchantRequest(id) {
   try {
     await updateDoc(doc(db,'merchant_requests',id), { adminNote: note.trim() });
     logAudit('إضافة ملاحظة على طلب انضمام تاجر', id);
-    showToast('✅ تم حفظ الملاحظة', 'ok');
+    showToast('تم حفظ الملاحظة', 'ok');
   } catch (e) { showToast('حدث خطأ', 'err'); console.error('[addNoteToMerchantRequest]', e); }
 }
 
@@ -83,12 +84,12 @@ function anyReqRow(r) {
   return `<div class="drv-row2" style="display:block;padding:10px 0">
     <div style="display:flex;justify-content:space-between;margin-bottom:4px"><strong>${esc(r.customerName)||'عميل'}</strong>${statusBadge(r.status==='new'?'pending':r.status)}</div>
     <div style="font-size:12px">${esc(r.request)||'--'}</div>
-    <div style="font-size:11px;color:var(--mu);margin-top:2px">${r.address?('📍 '+esc(r.address)):''}</div>
-    <div style="font-size:10px;color:var(--mu);margin-top:2px">🕐 ${fmtDate(r.createdAt)}</div>
-    ${r.adminNote ? `<div style="font-size:11px;color:var(--p);margin-top:4px">📝 ${esc(r.adminNote)}</div>` : ''}
+    <div style="font-size:11px;color:var(--mu);margin-top:2px;display:flex;align-items:center;gap:3px">${r.address?(icon('map-pin',11)+' '+esc(r.address)):''}</div>
+    <div style="font-size:10px;color:var(--mu);margin-top:2px;display:flex;align-items:center;gap:3px">${icon('clock',10)} ${fmtDate(r.createdAt)}</div>
+    ${r.adminNote ? `<div style="font-size:11px;color:var(--p);margin-top:4px;display:flex;align-items:center;gap:3px">${icon('file-text',11)} ${esc(r.adminNote)}</div>` : ''}
     <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
       ${r.status==='new' ? `<button class="mb2 mb-acc" onclick="acceptAnyRequest('${r.id}')">قبول</button><button class="mb2 mb-rej" onclick="rejectAnyRequest('${r.id}')">رفض</button>` : ''}
-      <button class="mb2 mb-view" onclick="addNoteToAnyRequest('${r.id}')">📝 ملاحظة</button>
+      <button class="mb2 mb-view" onclick="addNoteToAnyRequest('${r.id}')">${icon('file-text',12)} ملاحظة</button>
     </div>
   </div>`;
 }
@@ -114,7 +115,7 @@ export async function acceptAnyRequest(id) {
   try {
     await updateDoc(doc(db,'any_requests',id), { status: 'accepted' });
     logAudit('قبول طلب حر', id);
-    showToast('✅ تم قبول الطلب', 'ok');
+    showToast('تم قبول الطلب', 'ok');
   } catch (e) { showToast('حدث خطأ', 'err'); console.error('[acceptAnyRequest]', e); }
 }
 export async function rejectAnyRequest(id) {
@@ -130,7 +131,7 @@ export async function addNoteToAnyRequest(id) {
   try {
     await updateDoc(doc(db,'any_requests',id), { adminNote: note.trim() });
     logAudit('إضافة ملاحظة على طلب حر', id);
-    showToast('✅ تم حفظ الملاحظة', 'ok');
+    showToast('تم حفظ الملاحظة', 'ok');
   } catch (e) { showToast('حدث خطأ', 'err'); console.error('[addNoteToAnyRequest]', e); }
 }
 

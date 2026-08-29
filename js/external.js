@@ -5,10 +5,11 @@
 // ومش Ride - Collection مستقل بالكامل: external_purchases.
 
 import { db, collection, addDoc, getDoc, getDocs, updateDoc, doc, query, where, runTransaction, serverTimestamp } from './firebase.js';
-import { showToast, showScreen, RIDE_ELIGIBLE_VEHICLES, onListenersCleared, onSnapshot } from './utils.js';
+import { showToast, showScreen, RIDE_ELIGIBLE_VEHICLES, onListenersCleared, onSnapshot, closeModal } from './utils.js';
 import { getPricingConfig, calculateFare } from './pricing.js';
 import { _distMeters } from './driver.js';
 import { createNotification } from './notifications.js';
+import { openLocationPicker } from './maps.js';
 
 export const EXTERNAL_COLLECTION = 'external_purchases';
 
@@ -52,26 +53,49 @@ function trimLog(log, entry) {
 }
 
 let epRequestInProgress = false;
+let epPendingLocation = null; // {lat,lng,address,city,zone} - من الـ Location Picker المشترك بس (البند 8/9 - إشارة موقع واحدة موثوقة)
+
+// جديد (Phase 2B): فتح نفس الـ Location Picker المشترك المستخدم في الشيك أوت العادي وموقع
+// المتجر - بدل حقل نص حر منفصل تمامًا عن أي GPS/Geocoding حقيقي (المشكلة الأصلية في البند 5
+// من Phase 2B). اختيار الموقع هنا Preview بس لحد "تأكيد الموقع" جوه الـ Picker نفسه.
+export function epOpenLocationPicker() {
+  openLocationPicker({
+    title: 'موقع التسليم',
+    initialLoc: epPendingLocation ? [epPendingLocation.lat, epPendingLocation.lng] : undefined,
+    onConfirm: (loc) => {
+      epPendingLocation = loc;
+      const el = document.getElementById('ep-loc-summary');
+      if (el) el.textContent = loc.address || 'تم تحديد الموقع على الخريطة ✅';
+    },
+  });
+}
+
+// تصفير حالة الموقع عند إلغاء/إغلاق المودال - عشان طلب جديد لاحقًا يبدأ نضيف، مش يورّث موقع
+// طلب سابق بالغلط.
+export function epCancelAnyReq() {
+  epPendingLocation = null;
+  const el = document.getElementById('ep-loc-summary');
+  if (el) el.textContent = 'اختيار الموقع من الخريطة';
+  closeModal('any-req-modal');
+}
 
 // ===== Customer: إنشاء الطلب =====
-// القرار المعماري (MVP، موثّق في مراجعة Architecture): مفيش إحداثيات معروفة لـ "مكان" حر
-// النص (اسم/عنوان بس، بدون Geocoding) - فالتسعير هنا سعر خدمة ثابت (Purchase Fee + Delivery Fee)
-// بدون مكوّن مسافة (distanceKm=0)، بالظبط زي ما بيحصل في calculateFare() لأي Service من غير
-// باراميتر مسافة. موقع التسليم بس بيتاخد من GPS الجهاز الفعلي (نفس نمط getLocation في driver.js).
+// Phase 2B: الموقع بقى بيجي من الـ Location Picker المؤكد (lat/lng/address/city/zone) بدل
+// GPS صامت في الخلفية + عنوان نصي منفصل ممكن يختلفوا. صفر مصدرين متعارضين للموقع دلوقتي.
+// السعر لسه بدون مكوّن مسافة (distanceKm=0 ضمنيًا زي ما كان بالظبط) - التسعير مش جزء من
+// المرحلة دي (البند 10 IMPORTANT - DO NOT change pricing).
 export async function sendExternalPurchase() {
   if (!window.CU || epRequestInProgress) return;
   const placeName = document.getElementById('ep-place-name')?.value?.trim();
   const items = document.getElementById('any-req-txt')?.value?.trim();
-  const deliveryAddress = document.getElementById('any-req-addr')?.value?.trim();
+  const additionalNotes = document.getElementById('any-req-addr')?.value?.trim() || '';
   const approxBudget = Number(document.getElementById('ep-budget')?.value) || 0;
-  if (!placeName || !items || !deliveryAddress) { showToast('يرجى تعبئة اسم المكان والطلب والعنوان', 'err'); return; }
+  if (!placeName || !items || !epPendingLocation) {
+    showToast('يرجى تعبئة اسم المكان والطلب وتحديد الموقع من الخريطة', 'err');
+    return;
+  }
   epRequestInProgress = true;
   try {
-    const pos = await new Promise((resolve) => {
-      if (!navigator.geolocation) return resolve(null);
-      navigator.geolocation.getCurrentPosition(p => resolve(p.coords), () => resolve(null), { timeout: 8000 });
-    });
-    const deliveryLocation = pos ? { lat: pos.latitude, lng: pos.longitude } : null;
     const cfg = await getPricingConfig();
     const fare = calculateFare(cfg, 'external_purchase', {});
     const commSnap = await getDoc(doc(db, 'settings', 'commission'));
@@ -82,7 +106,14 @@ export async function sendExternalPurchase() {
       customerName: window.CUD?.name || 'عميل',
       driverId: null, candidateDriverIds: [], rejectedDriverIds: [], dispatchLog: [],
       placeName, placeAddress: placeName, items, notes: '', approxBudget,
-      deliveryAddress, deliveryLocation,
+      // البند 9 - Data Model الجديد: موقع منظّم واحد (نفس شكل pickupLocation في orders.js) +
+      // ملاحظات اختيارية منفصلة. مستندات قديمة فيها deliveryAddress/deliveryLocation بتفضل
+      // قابلة للقراءة زي ما هي (صفر Migration - البند 9 صراحة) عبر fallback في نقاط القراءة.
+      pickupLocation: {
+        latitude: epPendingLocation.lat, longitude: epPendingLocation.lng,
+        address: epPendingLocation.address || null, city: epPendingLocation.city || null, zone: epPendingLocation.zone || null,
+      },
+      additionalNotes,
       actualProductPrice: null,
       paymentResponsibility: 'captain_advances_cash',
       pricingSnapshot: { ...fare, commission, commissionRate: externalRate },
@@ -92,6 +123,8 @@ export async function sendExternalPurchase() {
     const ref = await addDoc(collection(db, EXTERNAL_COLLECTION), data);
     showToast('تم إرسال طلبك، جاري البحث عن كابتن... 🛍️', 'ok');
     const closeM = document.getElementById('any-req-modal'); if (closeM) closeM.classList.remove('open');
+    epPendingLocation = null;
+    const summaryEl = document.getElementById('ep-loc-summary'); if (summaryEl) summaryEl.textContent = 'اختيار الموقع من الخريطة';
     epCurrentId = ref.id;
     epShowStatus(ref.id);
     dispatchExternalPurchase(ref.id);
@@ -122,7 +155,9 @@ export async function dispatchExternalPurchase(purchaseId) {
     const u = d.data();
     if (!RIDE_ELIGIBLE_VEHICLES.includes(u.vehicleType)) return;
     if (typeof u.lat !== 'number' || typeof u.lng !== 'number') return;
-    const target = ep.deliveryLocation || { lat: u.lat, lng: u.lng };
+    const target = (ep.pickupLocation && typeof ep.pickupLocation.latitude === 'number')
+      ? { lat: ep.pickupLocation.latitude, lng: ep.pickupLocation.longitude }
+      : (ep.deliveryLocation || { lat: u.lat, lng: u.lng }); // مستند قديم من غير pickupLocation - fallback للحقل القديم
     candidates.push({ id: d.id, distM: _distMeters(target.lat, target.lng, u.lat, u.lng) });
   });
   candidates.sort((a, b) => a.distM - b.distM);
@@ -393,7 +428,7 @@ export function initDriverActiveExternalListener() {
     set('ep-active-status', EP_LABELS[active.status] || active.status);
     set('ep-active-place', active.placeName || '--');
     set('ep-active-items', active.items || '--');
-    set('ep-active-addr', active.deliveryAddress || '--');
+    set('ep-active-addr', active.pickupLocation?.address || active.deliveryAddress || '--');
     const btn = document.getElementById('ep-active-btn');
     const priceRow = document.getElementById('ep-active-price-row');
     if (btn) {

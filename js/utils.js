@@ -54,9 +54,31 @@ export const SC = {new:'sb sb-new',accepted:'sb sb-accepted',preparing:'sb sb-pr
   created:'sb sb-new', waiting_merchant:'sb sb-new', merchant_accepted:'sb sb-accepted',
   merchant_rejected:'sb sb-cancelled', searching_driver:'sb sb-accepted', driver_assigned:'sb sb-preparing',
   driver_arrived:'sb sb-preparing', picked_up:'sb sb-ready', on_the_way:'sb sb-delivering', delivered:'sb sb-done'};
+// ===== Phase 2 (Premium UI/UX): اعتماد نظام .status/.status--* الموجود بالفعل في التصميم (كان
+// معرّف في CSS بس مش مستخدم في أي مكان في المشروع) بدل نظام .sb/.sb-* القديم لعرض حالة الطلب.
+// SC نفسها اتسابت زي ما هي بالظبط (لسه Export، لسه بتتستخدم بنفس القيم القديمة لو حد محتاجها) -
+// ده إضافة جنبها مش تعديل فيها. المعنى الفعلي لكل حالة هو اللي بيحدد اللون دلوقتي (مش لون
+// عشوائي مختلف لكل حالة زي القديم): معلّق فعلًا (pending) / لسه شغالة (progress) / خلصت بنجاح
+// (success) / اتلغت أو اترفضت (danger). كل الحالات اللي معناها "الطلب لسه ماشي"
+// (accepted/preparing/ready/delivering/...) بتاخد نفس لون status--progress عشان المعنى المشترك
+// ده أهم حاجة تتلاحظ بنظرة سريعة - والتفرقة بين كل مرحلة وتانية بتفضل واضحة عن طريق الأيقونة
+// المختلفة لكل حالة، مش الاختفاء تمامًا.
+const ORDER_STATUS_META = {
+  new:['status--pending','clock'], created:['status--pending','clock'], waiting_merchant:['status--pending','clock'],
+  accepted:['status--progress','check-circle'], merchant_accepted:['status--progress','check-circle'],
+  preparing:['status--progress','utensils'], searching_driver:['status--progress','search'],
+  ready:['status--progress','package'], driver_assigned:['status--progress','bike'],
+  driver_arrived:['status--progress','map-pin'], picked_up:['status--progress','package'],
+  delivering:['status--progress','bike'], on_the_way:['status--progress','bike'],
+  done:['status--success','check-circle'], delivered:['status--success','check-circle'],
+  cancelled:['status--danger','x-circle'], merchant_rejected:['status--danger','x-circle'],
+};
+export function orderStatusBadge(status) {
+  const [cls, ic] = ORDER_STATUS_META[status] || ['status--neutral','clock'];
+  return `<span class="status ${cls}">${icon(ic,12)} ${SL[status]||'--'}</span>`;
+}
 // STEPS القديمة (لسه موجودة، مفيش حاجة تانية بتعتمد عليها غير الطلبات القديمة جدًا لو لقيناها)
 export const STEPS = ['new','accepted','preparing','ready','delivering','done'];
-export const STEP_ICONS = ['🆕','✅','👨‍🍳','📦','🛵','✅'];
 export const STEP_LABELS = ['جديد','تم القبول','جاري التحضير','جاهز للاستلام','في الطريق','تم التسليم'];
 // خطوات التتبع الجديدة (Order Engine) — دي اللي شاشة تتبع الطلب بتستخدمها دلوقتي
 export const NEW_STEPS = ['waiting_merchant','merchant_accepted','searching_driver','driver_assigned','driver_arrived','picked_up','on_the_way','delivered'];

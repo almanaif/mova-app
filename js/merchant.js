@@ -1,8 +1,10 @@
 // ===== merchant.js — شاشات التاجر: الطلبات والمنتجات =====
 
 import { addDoc, collection, db, deleteDoc, doc, getDoc, limit, orderBy, query, runTransaction, serverTimestamp, updateDoc, where } from './firebase.js';
-import { SC, SL, closeModal, esc, normalizeStatus, onListenersCleared, onSnapshot, showToast } from './utils.js';
+import { SL, closeModal, esc, normalizeStatus, onListenersCleared, onSnapshot, orderStatusBadge, secureCloudinaryUpload, showToast } from './utils.js';
+import { icon } from './icons.js';
 import { logAudit, openEditProd } from './admin.js';
+import { compressImage } from './driver.js';
 import { MERCHANT_CANCELLABLE_STATUSES, ORDER_STATUS, merchCancelOrd, merchantRespond, transitionOrder } from './orders.js';
 import { openLocationPicker } from './maps.js';
 
@@ -25,7 +27,7 @@ async function refreshMerchantLocStatus() {
     const snap = await getDoc(doc(db, 'stores', window.CU.uid));
     const sd = snap.exists() ? snap.data() : null;
     if (sd && typeof sd.lat === 'number' && typeof sd.lng === 'number') {
-      statusEl.textContent = '✅ الموقع محدد - اضغط للتعديل';
+      statusEl.innerHTML = icon('check-circle', 12) + ' الموقع محدد - اضغط للتعديل';
       window._merchStoreLoc = [sd.lat, sd.lng];
     } else {
       statusEl.textContent = 'لم يتم تحديد الموقع بعد - العملاء يشوفوا موقع افتراضي';
@@ -43,7 +45,7 @@ export function openMerchantLocationPicker() {
       try {
         await updateDoc(doc(db, 'stores', window.CU.uid), { lat, lng, updatedAt: serverTimestamp() });
         window._merchStoreLoc = [lat, lng];
-        showToast('✅ تم حفظ موقع المتجر', 'ok');
+        showToast('تم حفظ موقع المتجر', 'ok');
         refreshMerchantLocStatus();
       } catch (e) {
         showToast('تعذر حفظ الموقع، حاول مرة أخرى', 'err');
@@ -59,7 +61,7 @@ export function loadMerchantOrders() {
   const q = query(collection(db,'orders'), where('storeId','==',window.CU.uid), orderBy('createdAt','desc'), limit(20));
   merchantOrdersUnsub = onSnapshot(q, snap => {
     const today = new Date().toDateString(); let tOrd=0, tRev=0;
-    if (snap.empty) { document.getElementById('merch-ords-list').innerHTML='<div class="empty-state"><div class="ei">📦</div><p>لا توجد طلبات بعد</p></div>'; return; }
+    if (snap.empty) { document.getElementById('merch-ords-list').innerHTML='<div class="empty-state"><div class="ei">'+icon('package',40)+'</div><p>لا توجد طلبات بعد</p></div>'; return; }
     let html='';
     snap.forEach(d => {
       const o={...d.data(),id:d.id};
@@ -67,13 +69,13 @@ export function loadMerchantOrders() {
       if(dt.toDateString()===today){tOrd++;tRev+=o.total||0;}
       const st = normalizeStatus(o.status);
       html+=`<div class="merch-ord-card">
-        <div class="merch-ord-top"><span style="font-size:11px;font-weight:700;color:var(--mu)">#${d.id.slice(-6).toUpperCase()}</span><span class="${SC[o.status]||'sb sb-new'}">${SL[o.status]||'جديد'}</span></div>
-        <div style="font-size:12px;color:var(--mu)">👤 ${esc(o.customerName)||'عميل'} • ${o.total||0} ج</div>
+        <div class="merch-ord-top"><span style="font-size:11px;font-weight:700;color:var(--mu)">#${d.id.slice(-6).toUpperCase()}</span>${orderStatusBadge(o.status)}</div>
+        <div style="font-size:12px;color:var(--mu);display:flex;align-items:center;gap:4px">${icon('user',13)} ${esc(o.customerName)||'عميل'} • ${o.total||0} ج</div>
         <div style="font-size:11px;margin-top:4px">${(o.items||[]).map(i=>`${esc(i.name)} x${i.qty}`).join('، ')}</div>
         <div class="merch-ord-acts">
-          ${st===ORDER_STATUS.WAITING_MERCHANT?`<button class="mo-btn mo-acc" onclick="merchAcceptOrd('${d.id}')">✅ قبول</button><button class="mo-btn mo-rej" onclick="merchRejectOrd('${d.id}')">❌ رفض</button>`:''}
-          ${(st===ORDER_STATUS.MERCHANT_ACCEPTED||st===ORDER_STATUS.SEARCHING_DRIVER)?`<span style="font-size:11px;color:var(--mu);font-weight:600">🔎 جاري البحث عن مندوب...</span>`:''}
-          ${(st===ORDER_STATUS.DRIVER_ASSIGNED||st===ORDER_STATUS.DRIVER_ARRIVED)?`<span style="font-size:11px;color:var(--ok);font-weight:600">🛵 المندوب في الطريق للاستلام</span>`:''}
+          ${st===ORDER_STATUS.WAITING_MERCHANT?`<button class="mo-btn mo-acc" onclick="merchAcceptOrd('${d.id}')">${icon('check-circle',13)} قبول</button><button class="mo-btn mo-rej" onclick="merchRejectOrd('${d.id}')">${icon('x-circle',13)} رفض</button>`:''}
+          ${(st===ORDER_STATUS.MERCHANT_ACCEPTED||st===ORDER_STATUS.SEARCHING_DRIVER)?`<span style="font-size:11px;color:var(--mu);font-weight:600;display:inline-flex;align-items:center;gap:4px">${icon('search',13)} جاري البحث عن مندوب...</span>`:''}
+          ${(st===ORDER_STATUS.DRIVER_ASSIGNED||st===ORDER_STATUS.DRIVER_ARRIVED)?`<span style="font-size:11px;color:var(--ok);font-weight:600;display:inline-flex;align-items:center;gap:4px">${icon('bike',13)} المندوب في الطريق للاستلام</span>`:''}
           ${MERCHANT_CANCELLABLE_STATUSES.includes(st)?`<button class="mo-btn mo-rej" onclick="merchCancelOrdUI('${d.id}')">إلغاء الطلب</button>`:''}
         </div>
       </div>`;
@@ -88,7 +90,7 @@ export async function merchAcceptOrd(id) {
   try {
     const actor = { type: 'merchant', uid: window.CU?.uid, name: window.CUD?.storeName || window.CUD?.name };
     await merchantRespond(id, true, actor);
-    showToast('✅ تم قبول الطلب، جاري البحث عن مندوب','ok');
+    showToast('تم قبول الطلب، جاري البحث عن مندوب','ok');
   } catch(e) { showToast(e?.message==='invalid-transition' ? 'تم اتخاذ إجراء على هذا الطلب بالفعل' : 'حدث خطأ','err'); }
 }
 export async function merchRejectOrd(id) {
@@ -121,18 +123,18 @@ export function loadMerchantProds() {
   const q=query(collection(db,'products'),where('merchantId','==',window.CU.uid));
   merchantProdsUnsub=onSnapshot(q,snap=>{
     document.getElementById('m-prods').textContent=snap.size;
-    if(snap.empty){document.getElementById('merch-prods-list').innerHTML='<div class="empty-state"><div class="ei">📦</div><p>لا توجد منتجات</p><small>اضغط "إضافة منتج"</small></div>';return;}
+    if(snap.empty){document.getElementById('merch-prods-list').innerHTML='<div class="empty-state"><div class="ei">'+icon('package',40)+'</div><p>لا توجد منتجات</p><small>اضغط "إضافة منتج"</small></div>';return;}
     let html='';
     snap.forEach(d=>{
       const p={...d.data(),id:d.id};
-      html+=`<div style="background:#fff;border-radius:var(--r);padding:12px;margin-bottom:8px;box-shadow:var(--sh);border:1px solid var(--border);display:flex;gap:10px;align-items:center">
-        <div style="width:48px;height:48px;border-radius:10px;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0">${p.icon||'📦'}</div>
+      html+=`<div class="row-card">
+        <div class="thumb-md">${prodThumbHtml(p,22)}</div>
         <div style="flex:1"><strong style="font-size:13px;font-weight:800;display:block">${esc(p.name)}</strong><small style="color:var(--mu);font-size:11px">${esc(p.unit)}${p.stock!=null?' • الكمية: '+p.stock:''}</small>
           <div style="font-size:14px;font-weight:900;color:var(--p);margin-top:3px">${p.price} ج</div>
-          <div style="display:flex;gap:5px;margin-top:6px">
-            <button class="mb2 mb-view" onclick='openEditProd(${JSON.stringify(p).replace(/</g,"\\u003c")})'>✏️ تعديل</button>
-            <button class="mb2 mb-rej" onclick="delProd('${d.id}')">🗑️ حذف</button>
-            <span style="font-size:10px;font-weight:700;color:${p.available!==false?'var(--ok)':'var(--danger)'}">${p.available!==false?'✅ متاح':'❌ غير متاح'}</span>
+          <div style="display:flex;gap:5px;margin-top:6px;align-items:center">
+            <button class="mb2 mb-view" onclick='openEditProd(${JSON.stringify(p).replace(/</g,"\\u003c")})'>${icon('edit',13)} تعديل</button>
+            <button class="mb2 mb-rej" onclick="delProd('${d.id}')">${icon('trash',13)} حذف</button>
+            <span style="font-size:10px;font-weight:700;color:${p.available!==false?'var(--ok)':'var(--danger)'};display:inline-flex;align-items:center;gap:3px">${p.available!==false?icon('check-circle',12)+' متاح':icon('x-circle',12)+' غير متاح'}</span>
           </div>
         </div>
       </div>`;
@@ -141,13 +143,72 @@ export function loadMerchantProds() {
   });
 }
 
-export function openAddProd(){document.getElementById('add-prod-modal').classList.add('open');}
+export function openAddProd(){
+  removeProductImage('ap'); // تصفير أي صورة من محاولة إضافة سابقة اتلغت - نفس مبدأ الأمان المطبق على Location Picker (Phase 2B)
+  document.getElementById('add-prod-modal').classList.add('open');
+}
+
+// ===== صورة المنتج (بدل خاصية "أيقونة emoji") =====
+// بتعيد استخدام بالظبط نفس الـ pipeline المستخدم فعليًا لرفع مستندات المندوب (driver.js):
+// نفس فحص النوع/الحجم، نفس compressImage()، نفس secureCloudinaryUpload() الموجودة بالفعل في
+// utils.js - صفر Storage provider جديد وصفر مكتبة جديدة. state منفصلة لكل نموذج (ap = إضافة،
+// ep = تعديل) عشان الاتنين يشتغلوا مستقلين عن بعض من غير تعارض.
+const pendingProdImg = { ap: null, ep: null, ac: null, ac2: null };
+export function getPendingProdImage(prefix) { return pendingProdImg[prefix] ?? null; }
+
+export function uploadProductImage(prefix) {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = 'image/*';
+  inp.onchange = async () => {
+    const file = inp.files[0]; if (!file) return;
+    if (!file.type.startsWith('image/')) { showToast('لازم ترفع صورة بس (JPG أو PNG)', 'err'); return; }
+    const maxSizeMB = 8;
+    if (file.size > maxSizeMB * 1024 * 1024) { showToast(`حجم الصورة كبير جدًا (الحد الأقصى ${maxSizeMB} ميجا)`, 'err'); return; }
+    const wrap = document.getElementById(prefix + '-img-wrap');
+    wrap.innerHTML = `<div class="upload-box"><div class="u-ic">${icon('loader', 24)}</div><p style="font-size:12px">جارٍ ضغط ورفع الصورة...</p></div>`;
+    try {
+      const compressed = await compressImage(file);
+      const url = await secureCloudinaryUpload(compressed);
+      pendingProdImg[prefix] = url;
+      renderProdImgPreview(prefix, url);
+    } catch (e) {
+      wrap.innerHTML = `<div class="upload-box" onclick="uploadProductImage('${prefix}')"><div class="u-ic">${icon('camera', 24)}</div><p style="font-size:12px;color:#E11">فشل الرفع، اضغط للمحاولة تاني</p></div>`;
+      showToast('فشل رفع الصورة، حاول تاني', 'err');
+    }
+  };
+  inp.click();
+}
+export function renderProdImgPreview(prefix, url) {
+  pendingProdImg[prefix] = url;
+  const wrap = document.getElementById(prefix + '-img-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = `<div class="doc-preview">
+    <img src="${esc(url)}" alt="صورة المنتج">
+    <div class="doc-preview-acts">
+      <button onclick="uploadProductImage('${prefix}')">${icon('refresh', 14)} تغيير</button>
+      <button onclick="removeProductImage('${prefix}')">${icon('trash', 14)} حذف</button>
+    </div>
+  </div>`;
+}
+export function removeProductImage(prefix) {
+  pendingProdImg[prefix] = null;
+  const wrap = document.getElementById(prefix + '-img-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = `<div class="upload-box" onclick="uploadProductImage('${prefix}')"><div class="u-ic">${icon('camera', 24)}</div><p>اختر صورة المنتج</p></div>`;
+}
+
+// أيقونة/صورة محايدة احترافية بدل أي fallback بـ Emoji - تُستخدم في كل مكان يُعرض فيه منتج
+// من غير صورة (سواء منتج جديد من غير صورة، أو منتج قديم لسه معاه الحقل القديم icon فقط).
+export function prodThumbHtml(p, size) {
+  if (p.imageUrl) return `<img src="${esc(p.imageUrl)}" alt="${esc(p.name)}" style="width:100%;height:100%;object-fit:cover">`;
+  return icon('image', size);
+}
 export async function saveProd(){
   const name=document.getElementById('ap-name').value.trim();
   const cat=document.getElementById('ap-cat').value;
   const unit=document.getElementById('ap-unit').value.trim();
   const price=parseFloat(document.getElementById('ap-price').value)||0;
-  const icon=document.getElementById('ap-icon').value||'📦';
+  const imageUrl = pendingProdImg.ap || null;
   if(!name||!price){showToast('يرجى تعبئة الاسم والسعر','err');return;}
   const merchantId = window.adminTargetStore || window.CU?.uid;
   if(!merchantId)return;
@@ -155,15 +216,16 @@ export async function saveProd(){
     const storeName = window.adminTargetStore
       ? (document.getElementById('sm-name')?.value || 'متجر')
       : (window.CUD?.storeName||window.CUD?.name||'متجر');
-    await addDoc(collection(db,'products'),{merchantId,storeName,name,cat,unit,price,icon,available:true,createdAt:serverTimestamp()});
+    await addDoc(collection(db,'products'),{merchantId,storeName,name,cat,unit,price,imageUrl,available:true,createdAt:serverTimestamp()});
     closeModal('add-prod-modal');
-    ['ap-name','ap-price','ap-unit','ap-icon'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});
+    ['ap-name','ap-price','ap-unit'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});
+    removeProductImage('ap');
     if(window.adminTargetStore) logAudit('إضافة منتج (أدمن)', name+' — '+storeName);
-    showToast('✅ تم إضافة المنتج','ok');
+    showToast('تم إضافة المنتج','ok');
   }catch(e){showToast('حدث خطأ','err');}
 }
 export async function delProd(id){
-  try{await deleteDoc(doc(db,'products',id));showToast('✅ تم حذف المنتج','ok');}catch(e){showToast('حدث خطأ','err');}
+  try{await deleteDoc(doc(db,'products',id));showToast('تم حذف المنتج','ok');}catch(e){showToast('حدث خطأ','err');}
 }
 
 // --- رقم طلب تسلسلي: D1001, D1002, D1003... باستخدام عداد مركزي في Firestore ---

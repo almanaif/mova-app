@@ -1,7 +1,7 @@
 // ===== customer.js — شاشات العميل: تصفح المتاجر/المنتجات، السلة، الطلبات، التقييم، طلبات عامة =====
 
 import { addDoc, collection, db, getCountFromServer, limit, orderBy, query, serverTimestamp, where } from './firebase.js';
-import { SC, SL, NEW_STEPS, NEW_STEP_ICONS, NEW_STEP_LABELS, callStore, closeModal, debounce, esc, escJs, filterProds, normalizeStatus, onListenersCleared, onSnapshot, openWA, showScreen, showToast } from './utils.js';
+import { SL, NEW_STEPS, NEW_STEP_ICONS, NEW_STEP_LABELS, callStore, closeModal, debounce, esc, escJs, filterProds, normalizeStatus, onListenersCleared, onSnapshot, openWA, orderStatusBadge, showScreen, showToast } from './utils.js';
 import { ORDER_STATUS, custCancelOrder, openTrack } from './orders.js';
 import { icon } from './icons.js';
 import { openLocationPicker } from './maps.js';
@@ -37,7 +37,7 @@ export function loadProducts() {
   productsUnsub = onSnapshot(q, snap => {
     PRODS = snap.docs.map(d => {
       const p = d.data();
-      return { id:d.id, name:p.name, unit:p.unit, price:p.price, icon:p.icon||'🛒', cat:p.cat||'other',
+      return { id:d.id, name:p.name, unit:p.unit, price:p.price, imageUrl:p.imageUrl||null, cat:p.cat||'other',
                available:p.available!==false, merchantId:p.merchantId, storeName:p.storeName||'متجر' };
     });
     const activeBtn = document.querySelector('#screen-store .pc-btn.active');
@@ -66,7 +66,7 @@ export function loadCoupons() {
     if (!items.length) { if (sec) sec.style.display='none'; return; }
     if (sec) sec.style.display='block';
     if (scroll) scroll.innerHTML = items.map(c =>
-      `<div class="off-card"><div class="off-badge">${esc(c.badge)}</div><div class="off-icon">${esc(c.icon)||'🎟️'}</div><h4>${esc(c.title)}</h4><p>${esc(c.description)}</p><div class="off-code">${esc(c.code)}</div></div>`
+      `<div class="off-card"><div class="off-badge">${esc(c.badge)}</div><div class="off-icon">${c.imageUrl ? `<img src="${esc(c.imageUrl)}" alt="${esc(c.title)}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">` : icon('ticket',22)}</div><h4>${esc(c.title)}</h4><p>${esc(c.description)}</p><div class="off-code">${esc(c.code)}</div></div>`
     ).join('');
   });
 }
@@ -108,14 +108,14 @@ export function loadCategories() {
   categoriesUnsub = onSnapshot(q, snap => {
     CATS = {};
     const items = [];
-    snap.forEach(d => { const c = d.data(); CATS[d.id] = esc(`${c.icon||''} ${c.label||''}`.trim()); items.push({id:d.id, ...c}); });
+    snap.forEach(d => { const c = d.data(); CATS[d.id] = esc(c.label||''); items.push({id:d.id, ...c}); });
     const pcScroll = document.getElementById('pc-scroll');
     if (pcScroll) {
       pcScroll.innerHTML = `<button class="pc-btn active" onclick="filterProds('all',this)">الكل</button>` +
-        items.map(c => `<button class="pc-btn" onclick="filterProds('${c.id}',this)">${esc(c.icon)} ${esc(c.label)}</button>`).join('');
+        items.map(c => `<button class="pc-btn" onclick="filterProds('${c.id}',this)">${c.imageUrl ? `<img src="${esc(c.imageUrl)}" alt="${esc(c.label)}" style="width:16px;height:16px;object-fit:cover;border-radius:4px;vertical-align:middle">` : icon('tag',14)} ${esc(c.label)}</button>`).join('');
     }
     const apCat = document.getElementById('ap-cat');
-    if (apCat) apCat.innerHTML = items.map(c => `<option value="${c.id}">${esc(c.icon)} ${esc(c.label)}</option>`).join('') || '<option value="other">📦 عام</option>';
+    if (apCat) apCat.innerHTML = items.map(c => `<option value="${c.id}">${esc(c.label)}</option>`).join('') || '<option value="other">عام</option>';
   });
 }
 
@@ -173,7 +173,7 @@ export function loadProductsByStore(storeId, storeName, storePhone) {
   productsByStoreUnsub = onSnapshot(q, snap => {
     PRODS = snap.docs.map(d => {
       const p = d.data();
-      return { id:d.id, name:p.name, unit:p.unit, price:p.price, icon:p.icon||'🛒', cat:p.cat||'other',
+      return { id:d.id, name:p.name, unit:p.unit, price:p.price, imageUrl:p.imageUrl||null, cat:p.cat||'other',
                available:p.available!==false, merchantId:p.merchantId||storeId, storeName: storeName||'متجر' };
     });
     renderProds('all');
@@ -192,10 +192,10 @@ export function renderProds(cat) {
     grouped[c].forEach(p => {
       const inCart = window.cart.find(x=>x.id===p.id);
       const qty = inCart?.qty||0;
-      html += `<div class="prod-card"><div class="prod-img">${esc(p.icon)}</div><div class="prod-body"><h4>${esc(p.name)}</h4><div class="prod-unit">${esc(p.unit)}</div><div class="prod-foot"><span class="prod-price">${p.price} ج</span>
+      html += `<div class="prod-card"><div class="prod-img">${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="${esc(p.name)}" style="width:100%;height:100%;object-fit:cover">` : icon('image',26)}</div><div class="prod-body"><h4>${esc(p.name)}</h4><div class="prod-unit">${esc(p.unit)}</div><div class="prod-foot"><span class="prod-price">${p.price} ج</span>
         ${p.available ? qty>0
-          ? `<div class="qty-ctrl"><button class="qty-btn" onclick="chgQty('${p.id}',-1)">−</button><span class="qty-num" id="qty-${p.id}">${qty}</span><button class="qty-btn" onclick="chgQty('${p.id}',1)">+</button></div>`
-          : `<button class="prod-add" onclick="addCart('${p.id}')">+</button>`
+          ? `<div class="qty-ctrl"><button class="qty-btn" onclick="chgQty('${p.id}',-1)">${icon('minus',13)}</button><span class="qty-num" id="qty-${p.id}">${qty}</span><button class="qty-btn" onclick="chgQty('${p.id}',1)">${icon('plus',13)}</button></div>`
+          : `<button class="prod-add" onclick="addCart('${p.id}')">${icon('plus',15)}</button>`
           : '<span class="prod-unavail">غير متاح</span>'}
       </div></div></div>`;
     });
@@ -216,7 +216,7 @@ export const doSearch = debounce(function (val) {
   if (!matches.length) { res.innerHTML='<div class="empty-state" style="padding:16px"><p>لا توجد نتائج</p></div>'; return; }
   res.innerHTML = matches.slice(0,8).map(p =>
     `<div class="res-item" onclick="showScreen('screen-store');renderProds('all')">
-      <div class="res-ic">${esc(p.icon)}</div>
+      <div class="thumb-sm">${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="${esc(p.name)}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">` : icon('image',18)}</div>
       <div class="res-info"><strong>${esc(p.name)}</strong><small>${esc(p.unit)} • ${esc(p.storeName)}</small></div>
       <span class="res-price">${p.price} ج</span>
     </div>`
@@ -269,14 +269,14 @@ export function renderCartScreen() {
   }
   list.innerHTML = window.cart.map(c => `
     <div class="card" style="margin-bottom:10px;display:flex;align-items:center;gap:10px">
-      <div style="font-size:30px">${esc(c.icon)||'🛒'}</div>
+      <div class="thumb-sm">${c.imageUrl ? `<img src="${esc(c.imageUrl)}" alt="${esc(c.name)}" style="width:100%;height:100%;object-fit:cover">` : icon('image',22)}</div>
       <div style="flex:1;min-width:0">
         <h4 style="font-size:13px;font-weight:800;margin-bottom:2px">${esc(c.name)}</h4>
         <div style="font-size:11px;color:var(--color-text-muted)">${esc(c.storeName)||''}</div>
         <div class="t-price" style="color:var(--color-primary);margin-top:4px">${c.price} ج</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
-        <div class="qty-ctrl"><button class="qty-btn" onclick="chgQty('${c.id}',-1)">−</button><span class="qty-num">${c.qty}</span><button class="qty-btn" onclick="chgQty('${c.id}',1)">+</button></div>
+        <div class="qty-ctrl"><button class="qty-btn" onclick="chgQty('${c.id}',-1)">${icon('minus',13)}</button><span class="qty-num">${c.qty}</span><button class="qty-btn" onclick="chgQty('${c.id}',1)">${icon('plus',13)}</button></div>
         <button onclick="removeCartItem('${c.id}')" style="background:none;border:none;color:var(--color-danger);font-size:11px;cursor:pointer;display:flex;align-items:center;gap:3px">${icon('trash',13)} حذف</button>
       </div>
     </div>`).join('');
@@ -358,7 +358,7 @@ export function loadOrders() {
         html += `<div class="order-track-card card" style="margin-bottom:10px;cursor:pointer" onclick="openTrack('${d.id}')">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
             <span style="font-size:11px;font-weight:700;color:var(--color-text-muted)">#${d.id.slice(-6).toUpperCase()}</span>
-            <span class="${SC[o.status]||'sb sb-new'}">${SL[o.status]||'جديد'}</span>
+            ${orderStatusBadge(o.status)}
           </div>
           <div style="display:flex;gap:4px;margin-bottom:8px;overflow-x:auto">${stepsHtml}</div>
           <div style="display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid var(--color-border);font-size:12px">

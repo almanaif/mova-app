@@ -1,7 +1,8 @@
 // ===== driver.js — شاشات المندوب: GPS، الطلبات، معالج تسجيل مندوب جديد =====
 
 import { average, collection, count, db, doc, getAggregateFromServer, limit, orderBy, query, runTransaction, serverTimestamp, updateDoc, where } from './firebase.js';
-import { SC, SL, esc, escJs, normalizeStatus, onListenersCleared, onSnapshot, secureCloudinaryUpload, setLoad, showScreen, showToast } from './utils.js';
+import { SL, esc, escJs, normalizeStatus, onListenersCleared, onSnapshot, orderStatusBadge, secureCloudinaryUpload, setLoad, showScreen, showToast } from './utils.js';
+import { icon } from './icons.js';
 import { getNextRequestId } from './merchant.js';
 import { ORDER_STATUS, acceptOrderAsDriver, getDispatchQuery, transitionOrder } from './orders.js';
 import { updateDriverSelfLocation, initDriverRegLocationMap } from './maps.js';
@@ -16,9 +17,9 @@ import { listenExternalOffers, initDriverActiveExternalListener } from './extern
 function _gpsErrorMessage(err) {
   if (!err) return 'تعذر تحديد موقعك';
   switch (err.code) {
-    case err.PERMISSION_DENIED: return '📍 تم رفض إذن الموقع - فعّله من إعدادات المتصفح';
-    case err.POSITION_UNAVAILABLE: return '📍 تعذر تحديد موقعك حاليًا، حاول مرة أخرى';
-    case err.TIMEOUT: return '📍 استغرق تحديد الموقع وقتًا طويلًا، حاول مرة أخرى';
+    case err.PERMISSION_DENIED: return 'تم رفض إذن الموقع - فعّله من إعدادات المتصفح';
+    case err.POSITION_UNAVAILABLE: return 'تعذر تحديد موقعك حاليًا، حاول مرة أخرى';
+    case err.TIMEOUT: return 'استغرق تحديد الموقع وقتًا طويلًا، حاول مرة أخرى';
     default: return 'تعذر تحديد موقعك';
   }
 }
@@ -27,13 +28,13 @@ export function getLocation() {
   // جديد (Sprint 3.7 - البند 16، حالة LOCATING): كانت الشاشة بتفضل من غير أي مؤشر لحد ما
   // النتيجة (نجاح/فشل) توصل - ممكن ياخد ثواني على شبكة بطيئة، فالمستخدم مايعرفش هل ضغطته
   // اتسجلت أصلًا. Toast بسيطة بس، مفيش تعقيد إضافي.
-  showToast('📍 جاري تحديد موقعك...', '');
+  showToast('جاري تحديد موقعك...', '');
   navigator.geolocation.getCurrentPosition(pos => {
     const {latitude:lat, longitude:lng, accuracy} = pos.coords;
     window.userLat = lat; window.userLng = lng;
     // دقة ضعيفة جدًا (>200 متر) - نستخدم الموقع برضه (أفضل من مفيش حاجة) بس نوضح للمستخدم
     // إنها مش دقيقة عشان يقدر يصححها يدويًا لو محتاج (بدل ما نوهمه إنها دقة عالية)
-    showToast(accuracy && accuracy > 200 ? '📍 تم تحديد موقعك تقريبيًا (دقة ضعيفة)' : '📍 تم تحديد موقعك', 'ok');
+    showToast(accuracy && accuracy > 200 ? 'تم تحديد موقعك تقريبيًا (دقة ضعيفة)' : 'تم تحديد موقعك', 'ok');
     if (window.CU && window.CUD?.role === 'customer') {
       updateDoc(doc(db,'users',window.CU.uid), {lat, lng}).catch(()=>{});
     }
@@ -68,7 +69,7 @@ export function startGPS() {
     // بموقع غلط تمامًا للمندوب بدل ما ماتتحدثش الخريطة أصلًا لحد ما توصل نبضة أدق. لكن مفيش
     // داعي نسيب المندوب من غير أي تفسير ليه الخريطة "متجمدة" - Feedback مُهدّأ (throttled).
     if (typeof accuracy === 'number' && accuracy > 500) {
-      _throttledGpsFeedback('📡 دقة الموقع ضعيفة، جارٍ محاولة تحديد موقع أدق...');
+      _throttledGpsFeedback('دقة الموقع ضعيفة، جارٍ محاولة تحديد موقع أدق...');
       return;
     }
     window.driverLat = lat; window.driverLng = lng;
@@ -108,7 +109,7 @@ export function stopGPS() {
 export function loadDriverData() {
   const ud = window.CUD;
   if (ud) {
-    document.getElementById('drv-name').textContent = `أهلاً، ${ud.fullName||ud.name||''} 👋`;
+    document.getElementById('drv-name').textContent = `أهلاً، ${ud.fullName||ud.name||''}`;
     document.getElementById('drv-prof-name').textContent = ud.fullName||ud.name||'--';
     document.getElementById('drv-prof-sub').textContent = ud.email||'--';
     if (ud.photoURL) {
@@ -129,9 +130,10 @@ export function loadDriverData() {
     if (joinedLine) { if (ud.createdAt?.toDate) { document.getElementById('drv-prof-joined').textContent = ud.createdAt.toDate().toLocaleDateString('ar-EG', { year:'numeric', month:'long' }); joinedLine.style.display = 'flex'; } else joinedLine.style.display = 'none'; }
     const statusBadge = document.getElementById('drv-prof-status');
     if (statusBadge) {
-      const map = { active: ['✅ نشط','rgba(0,200,150,.2)','#00E5B0'], pending: ['⏳ قيد المراجعة','rgba(255,215,0,.2)','#FFD700'], rejected: ['❌ مرفوض','rgba(239,68,68,.2)','#EF4444'] };
-      const [txt,bg,color] = map[ud.status] || map.active;
-      statusBadge.textContent = txt; statusBadge.style.background = bg; statusBadge.style.color = color;
+      const map = { active: ['check-circle','نشط','status--success'], pending: ['clock','قيد المراجعة','status--pending'], rejected: ['x-circle','مرفوض','status--danger'] };
+      const [ic,txt,cls] = map[ud.status] || map.active;
+      statusBadge.className = 'status ' + cls;
+      statusBadge.innerHTML = icon(ic, 12) + ' ' + esc(txt);
     }
   }
   loadDriverOrders();
@@ -207,7 +209,7 @@ export function loadDriverOrders() {
     const today = new Date().toDateString();
     let tOrd=0, tEarn=0, wOrd=0, wEarn=0;
     const now = new Date();
-    if (snap.empty) { list.innerHTML='<div class="empty-state"><div class="ei">📭</div><p>لا توجد طلبات</p></div>'; return; }
+    if (snap.empty) { list.innerHTML='<div class="empty-state"><div class="ei">'+icon('inbox',40)+'</div><p>لا توجد طلبات</p></div>'; return; }
     let html = '';
     snap.forEach(d => {
       const o = {...d.data(),id:d.id};
@@ -218,16 +220,16 @@ export function loadDriverOrders() {
       // on_the_way -> delivered. normalizeStatus() بيطبّع أي حالة قديمة برضه (توافق عكسي).
       const st = normalizeStatus(o.status);
       let actionHtml = '';
-      if (st === ORDER_STATUS.DRIVER_ASSIGNED) actionHtml = `<button class="mb2 mb-acc" onclick="updOrdStatus('${d.id}','${ORDER_STATUS.DRIVER_ARRIVED}')">وصلت للمتجر 📍</button>`;
-      else if (st === ORDER_STATUS.DRIVER_ARRIVED) actionHtml = `<button class="mb2 mb-acc" onclick="updOrdStatus('${d.id}','${ORDER_STATUS.PICKED_UP}')">استلمت الطلب ✓</button>`;
-      else if (st === ORDER_STATUS.PICKED_UP) actionHtml = `<button class="mb2 mb-acc" onclick="updOrdStatus('${d.id}','${ORDER_STATUS.ON_THE_WAY}')">في الطريق 🛵</button>`;
-      else if (st === ORDER_STATUS.ON_THE_WAY) actionHtml = `<button class="mb2 mb-acc" onclick="updOrdStatus('${d.id}','${ORDER_STATUS.DELIVERED}')">سلّمت ✓</button>`;
-      else if (st === ORDER_STATUS.WAITING_MERCHANT || st === ORDER_STATUS.MERCHANT_ACCEPTED || st === ORDER_STATUS.SEARCHING_DRIVER) actionHtml = `<span style="font-size:11px;color:var(--mu);font-weight:600">⏳ بانتظار تجهيز التاجر</span>`;
-      else if (st === ORDER_STATUS.CANCELLED || st === ORDER_STATUS.MERCHANT_REJECTED) actionHtml = `<span style="font-size:11px;color:var(--danger);font-weight:700">❌ الطلب ملغي</span>`;
+      if (st === ORDER_STATUS.DRIVER_ASSIGNED) actionHtml = `<button class="mb2 mb-acc" onclick="updOrdStatus('${d.id}','${ORDER_STATUS.DRIVER_ARRIVED}')">وصلت للمتجر ${icon('map-pin',14)}</button>`;
+      else if (st === ORDER_STATUS.DRIVER_ARRIVED) actionHtml = `<button class="mb2 mb-acc" onclick="updOrdStatus('${d.id}','${ORDER_STATUS.PICKED_UP}')">استلمت الطلب ${icon('check-circle',14)}</button>`;
+      else if (st === ORDER_STATUS.PICKED_UP) actionHtml = `<button class="mb2 mb-acc" onclick="updOrdStatus('${d.id}','${ORDER_STATUS.ON_THE_WAY}')">في الطريق ${icon('bike',14)}</button>`;
+      else if (st === ORDER_STATUS.ON_THE_WAY) actionHtml = `<button class="mb2 mb-acc" onclick="updOrdStatus('${d.id}','${ORDER_STATUS.DELIVERED}')">سلّمت ${icon('check-circle',14)}</button>`;
+      else if (st === ORDER_STATUS.WAITING_MERCHANT || st === ORDER_STATUS.MERCHANT_ACCEPTED || st === ORDER_STATUS.SEARCHING_DRIVER) actionHtml = `<span style="font-size:11px;color:var(--mu);font-weight:600;display:inline-flex;align-items:center;gap:4px">${icon('clock',13)} بانتظار تجهيز التاجر</span>`;
+      else if (st === ORDER_STATUS.CANCELLED || st === ORDER_STATUS.MERCHANT_REJECTED) actionHtml = `<span style="font-size:11px;color:var(--danger);font-weight:700;display:inline-flex;align-items:center;gap:4px">${icon('x-circle',13)} الطلب ملغي</span>`;
       html += `<div class="ord-card">
-        <div class="ord-top"><span class="ord-id">#${d.id.slice(-6).toUpperCase()}</span><span class="${SC[o.status]||'sb sb-new'}">${SL[o.status]||'جديد'}</span></div>
-        <div class="ord-route"><div class="ord-pt"><div class="ol">الاستلام</div><div class="ov">${esc(o.storeName)||'--'}</div></div><span class="ord-arr">←</span><div class="ord-pt"><div class="ol">التوصيل</div><div class="ov">${esc(o.customerName)||'العميل'}</div></div></div>
-        ${o.customerPhone ? `<div style="display:flex;gap:8px;margin:6px 0"><button class="ha-btn ha-call" onclick="callStore('${escJs(o.customerPhone)}')">📞 اتصل بالعميل</button><button class="ha-btn ha-wa" onclick="openWA('${escJs(o.customerPhone)}','${escJs(o.customerName||'العميل')}')">💬 واتساب</button></div>` : ''}
+        <div class="ord-top"><span class="ord-id">#${d.id.slice(-6).toUpperCase()}</span>${orderStatusBadge(o.status)}</div>
+        <div class="ord-route"><div class="ord-pt"><div class="ol">الاستلام</div><div class="ov">${esc(o.storeName)||'--'}</div></div><span class="ord-arr">${icon('arrow-left',15)}</span><div class="ord-pt"><div class="ol">التوصيل</div><div class="ov">${esc(o.customerName)||'العميل'}</div></div></div>
+        ${o.customerPhone ? `<div style="display:flex;gap:8px;margin:6px 0"><button class="ha-btn ha-call" onclick="callStore('${escJs(o.customerPhone)}')">${icon('phone',14)} اتصل بالعميل</button><button class="ha-btn ha-wa" onclick="openWA('${escJs(o.customerPhone)}','${escJs(o.customerName||'العميل')}')">${icon('message-circle',14)} واتساب</button></div>` : ''}
         <div class="ord-foot"><div class="ord-earn">${o.driverFee||0} ج <small>أجر التوصيل</small></div>
           <div style="display:flex;gap:5px">${actionHtml}</div>
         </div>
@@ -252,7 +254,7 @@ export async function acceptOrd() {
   try {
     await acceptOrderAsDriver(window._pendingOrdId, window.CU.uid, window.CUD?.fullName || window.CUD?.name || '', window.CUD?.phone || '');
     document.getElementById('new-ord-banner').style.display='none';
-    showToast('✅ تم قبول الطلب! توجه للمتجر','ok');
+    showToast('تم قبول الطلب! توجه للمتجر','ok');
   } catch(e) {
     if (e?.message === 'busy') showToast('عندك طلب شغال بالفعل، خلّصه الأول','err');
     else if (e?.message === 'taken') showToast('الطلب اتقبل من مندوب تاني','err');
@@ -270,7 +272,7 @@ export async function updOrdStatus(id, status) {
     if (status === ORDER_STATUS.DELIVERED && window.CU) {
       await updateDoc(doc(db,'users',window.CU.uid), {activeOrderId: null}).catch(()=>{});
     }
-    const msgs = {driver_arrived:'📍 تم تسجيل وصولك للمتجر', picked_up:'📦 تم استلام الطلب', on_the_way:'🛵 في الطريق للعميل', delivered:'✅ تم التسليم بنجاح!'};
+    const msgs = {driver_arrived:'تم تسجيل وصولك للمتجر', picked_up:'تم استلام الطلب', on_the_way:'في الطريق للعميل', delivered:'تم التسليم بنجاح!'};
     showToast(msgs[status]||'تم التحديث','ok');
   } catch(e) { showToast(e?.message==='invalid-transition' ? 'لا يمكن تنفيذ هذا الانتقال الآن' : 'حدث خطأ','err'); }
 }
@@ -279,7 +281,7 @@ export function toggleOnline(el) {
   window.onlineStatus = !window.onlineStatus;
   document.getElementById('tog-dot').className='tog-dot '+(window.onlineStatus?'on':'off');
   document.getElementById('tog-lbl').textContent = window.onlineStatus?'متاح':'غير متاح';
-  showToast(window.onlineStatus?'🟢 أنت متاح الآن':'⚫ أنت غير متاح',window.onlineStatus?'ok':'');
+  showToast(window.onlineStatus?'أنت متاح الآن':'أنت غير متاح',window.onlineStatus?'ok':'');
   if (!window.onlineStatus) {
     document.getElementById('new-ord-banner').style.display='none';
     const rb = document.getElementById('ride-offer-banner'); if (rb) rb.style.display='none';
@@ -312,9 +314,14 @@ window.uploadedDocs = {};
 
 // --- Draft autosave: لو المندوب قفل الصفحة، بياناته متحفوظة محليًا ومترجعله تاني ---
 export const DREG_DRAFT_KEY = 'manayef_drv_draft';
+// أمان (Medium #2 - Security Audit): "d-nid" (الرقم القومي) و"d-emerg" (رقم الطوارئ) اتشالوا
+// عمدًا من القائمة دي - ممنوع يتخزنوا في localStorage خالص. الإرسال الفعلي للتسجيل بيقرا
+// قيمتهم مباشرة من الـ DOM وقت الضغط على "إرسال" (راجع submitDriverRegistration)، مش من هنا،
+// فحذفهم من الـ Draft مالوش أي تأثير على عملية التسجيل نفسها - بس المستخدم هيحتاج يكتبهم
+// تاني لو قفل الصفحة في النص وفتحها تاني.
 export function dregSaveDraft(){
   try{
-    const ids=['d-name','d-phone','d-dob','d-nid','d-emerg','d-addr','d-vtype','d-vmodel','d-vcolor','d-plate'];
+    const ids=['d-name','d-phone','d-dob','d-addr','d-vtype','d-vmodel','d-vcolor','d-plate'];
     const data={}; ids.forEach(id=>{const el=document.getElementById(id); if(el) data[id]=el.value;});
     data.hasExp = window.driverHasExp!==false;
     localStorage.setItem(DREG_DRAFT_KEY, JSON.stringify(data));
@@ -325,6 +332,13 @@ export function dregLoadDraft(){
   try{
     const raw=localStorage.getItem(DREG_DRAFT_KEY); if(!raw) return;
     const data=JSON.parse(raw);
+    // أمان (Medium #2): لو Draft قديم (من نسخة سابقة من التطبيق) لسه فيه الحقول الحساسة دي
+    // متخزنة، بنشيلها من الكائن فورًا ومن غير ما نحطهم في الـ DOM خالص، وبنعيد حفظ نسخة نضيفة
+    // في نفس مكان التخزين (localStorage['manayef_drv_draft']) - صفر مكان تخزين جديد.
+    let hadSensitive = false;
+    if ('d-nid' in data) { delete data['d-nid']; hadSensitive = true; }
+    if ('d-emerg' in data) { delete data['d-emerg']; hadSensitive = true; }
+    if (hadSensitive) { try { localStorage.setItem(DREG_DRAFT_KEY, JSON.stringify(data)); } catch(e){} }
     Object.keys(data).forEach(id=>{const el=document.getElementById(id); if(el && id!=='hasExp') el.value=data[id];});
     if(data.hasExp===false) dregSetExp(false);
   }catch(e){}
@@ -435,7 +449,7 @@ export function dregRenderReview(){
     ['لون المركبة', document.getElementById('d-vcolor').value||'--'],
     ['رقم اللوحة', document.getElementById('d-plate').value||'--'],
     ['خبرة سابقة', window.driverHasExp!==false?'نعم':'لأ'],
-    ['الموقع', window.driverLoc?'✅ محدد':'غير محدد'],
+    ['الموقع', window.driverLoc?'محدد':'غير محدد'],
   ];
   document.getElementById('dreg-review').innerHTML = rows.map(r=>`<div class="review-row"><span>${esc(r[0])}</span><span>${esc(r[1])}</span></div>`).join('');
 }
@@ -444,18 +458,18 @@ export function dregRenderReview(){
 export async function dregGetLocation(){
   if(!navigator.geolocation){ showToast('المتصفح مايدعمش تحديد الموقع','err'); return; }
   const btn=document.getElementById('loc-btn');
-  btn.textContent='⏳ جارٍ تحديد موقعك...';
+  btn.innerHTML=icon('loader',16)+' جارٍ تحديد موقعك...';
   navigator.geolocation.getCurrentPosition(pos=>{
     const {latitude,longitude}=pos.coords;
     window.driverLoc={lat:latitude,lng:longitude};
-    btn.textContent='✅ تم تحديد موقعك';
+    btn.innerHTML=icon('check-circle',16)+' تم تحديد موقعك';
     btn.classList.add('got');
     const wrap=document.getElementById('loc-map-wrap');
     wrap.style.display='block';
     setTimeout(()=>{ initDriverRegLocationMap(latitude, longitude); },100);
     dregSaveDraft();
   }, err=>{
-    btn.textContent='📍 تحديد موقعي الحالي';
+    btn.innerHTML=icon('map-pin',16)+' تحديد موقعي الحالي';
     showToast('مقدرناش نحدد موقعك، اتأكد إن إذن الموقع مفعّل','err');
   }, {enableHighAccuracy:true, timeout:10000});
 }
@@ -516,16 +530,16 @@ export async function uploadDoc(id, label){
     const maxSizeMB=8;
     if(file.size>maxSizeMB*1024*1024){ showToast(`حجم الصورة كبير جدًا (الحد الأقصى ${maxSizeMB} ميجا)`,'err'); return; }
     const wrap=document.getElementById(id+'-wrap');
-    wrap.innerHTML=`<div class="upload-box" id="${id}"><div class="u-ic">⏳</div><p style="font-size:12px">جارٍ ضغط ورفع الصورة...</p></div>`;
+    wrap.innerHTML=`<div class="upload-box" id="${id}"><div class="u-ic">${icon('loader',24)}</div><p style="font-size:12px">جارٍ ضغط ورفع الصورة...</p></div>`;
     try{
       const compressed = await compressImage(file);
       const url = await secureCloudinaryUpload(compressed);
       window.uploadedDocs[id]=url;
       dregRenderDocPreview(id,label,url);
-      showToast(`✅ تم رفع ${label}`,'ok');
+      showToast(`تم رفع ${label}`,'ok');
       dregUpdateProgress();
     }catch(e){
-      wrap.innerHTML=`<div class="upload-box" onclick="uploadDoc('${id}','${escJs(label)}')" id="${id}"><div class="u-ic">📷</div><p style="font-size:12px;color:#E11">فشل الرفع، اضغط للمحاولة تاني</p></div>`;
+      wrap.innerHTML=`<div class="upload-box" onclick="uploadDoc('${id}','${escJs(label)}')" id="${id}"><div class="u-ic">${icon('camera',24)}</div><p style="font-size:12px;color:#E11">فشل الرفع، اضغط للمحاولة تاني</p></div>`;
       showToast('فشل رفع الصورة، حاول تاني','err');
     }
   };
@@ -536,17 +550,17 @@ export function dregRenderDocPreview(id,label,url){
   wrap.innerHTML = `<div class="doc-preview">
     <img src="${esc(url)}" alt="${esc(label)}">
     <div class="doc-preview-acts">
-      <button onclick="zoomDoc('${escJs(url)}')">🔍 تكبير</button>
-      <button onclick="uploadDoc('${escJs(id)}','${escJs(label)}')">🔄 تغيير</button>
-      <button onclick="removeUploadedDoc('${escJs(id)}','${escJs(label)}')">🗑️ حذف</button>
+      <button onclick="zoomDoc('${escJs(url)}')">${icon('search',14)} تكبير</button>
+      <button onclick="uploadDoc('${escJs(id)}','${escJs(label)}')">${icon('refresh',14)} تغيير</button>
+      <button onclick="removeUploadedDoc('${escJs(id)}','${escJs(label)}')">${icon('trash',14)} حذف</button>
     </div>
   </div>
-  <p style="text-align:center;font-size:11px;color:var(--ok);font-weight:800;margin-bottom:8px">✅ ${esc(label)}</p>`;
+  <p style="text-align:center;font-size:11px;color:var(--ok);font-weight:800;margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:4px">${icon('check-circle',13)} ${esc(label)}</p>`;
 }
 export function removeUploadedDoc(id,label){
   delete window.uploadedDocs[id];
   const wrap=document.getElementById(id+'-wrap');
-  wrap.innerHTML=`<div class="upload-box" onclick="uploadDoc('${escJs(id)}','${escJs(label)}')" id="${id}"><span class="doc-help" onclick="event.stopPropagation();showToast('لازم تكون الصورة واضحة وكل البيانات ظاهرة')">؟</span><div class="u-ic">📷</div><p>${esc(label)}</p></div>`;
+  wrap.innerHTML=`<div class="upload-box" onclick="uploadDoc('${escJs(id)}','${escJs(label)}')" id="${id}"><span class="doc-help" onclick="event.stopPropagation();showToast('لازم تكون الصورة واضحة وكل البيانات ظاهرة')">؟</span><div class="u-ic">${icon('camera',24)}</div><p>${esc(label)}</p></div>`;
   dregUpdateProgress();
 }
 export function zoomDoc(url){
@@ -560,7 +574,7 @@ export function toggleAgree(el){
   const b=document.getElementById('agree-box');
   b.style.background=window.agreedTerms?'var(--ok)':'#fff';
   b.style.borderColor=window.agreedTerms?'var(--ok)':'var(--border)';
-  b.innerHTML=window.agreedTerms?'<span style="color:#fff;font-size:12px">✓</span>':'';
+  b.innerHTML=window.agreedTerms?`<span style="color:#fff;display:flex">${icon('check',12)}</span>`:'';
   dregUpdateProgress();
 }
 
@@ -593,7 +607,7 @@ export async function submitDrvReg(){
     document.querySelector('.dreg-hdr').style.display='none';
     document.getElementById('dreg-pending').style.display='block';
     document.getElementById('dreg-reqid').textContent = requestId;
-    showToast('✅ تم إرسال طلبك!','ok');
+    showToast('تم إرسال طلبك!','ok');
   }catch(e){ showToast('حدث خطأ، حاول تاني','err'); }
   finally{ setLoad('dreg-btn','dreg-sp',false); document.getElementById('dreg-btn').disabled=false; }
 }
