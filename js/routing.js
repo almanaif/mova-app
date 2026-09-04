@@ -20,58 +20,121 @@ const PROVIDER_NAME = 'osrm-public-demo';
 const _routeCache = new Map();
 const CACHE_COORD_PRECISION = 5; // ~1.1 متر دقة - كفاية لاعتبار نفس النقطتين "نفس المسار"
 const CACHE_MAX_ENTRIES = 50; // سقف بسيط يمنع تضخم الـ Map لو المستخدم قلّب كتير في نفس الجلسة
+// جديد (Hardening Pass P4.1 - البند 6): منع طلبات OSRM متزامنة مكررة لنفس النقطتين بالظبط -
+// نفس نمط _poiInFlight المستخدم فعليًا تحت لـ searchPOICategory بالحرف، صفر تعقيد إضافي.
+const _routeInFlight = new Map();
 
 function _cacheKey(origin, destination) {
   const r = (n) => Number(n).toFixed(CACHE_COORD_PRECISION);
   return `${r(origin.lat)},${r(origin.lng)}|${r(destination.lat)},${r(destination.lng)}`;
 }
 
+// جديد (Hardening Pass P4.1 - البند 7): إحداثيات finite وضمن المدى الجغرافي الصحيح بس - نفس
+// معيار isValidCoord() في orders.js بالظبط، ما عدا رفض (0,0) عمدًا: ده افتراض عمل خاص بمنطقة
+// نشاط تطبيق معيّن (مصر)، مش قاعدة جغرافية عامة - قرار الرفض ده يفضل مسؤولية الطرف المستدعي
+// (orders.js/rides.js، كل واحد بمنطقه الخاص)، مش routing.js اللي المفروض يفضل Provider-agnostic
+// وعام تمامًا زي ما موثّق في تعليق أول الملف.
+function isFiniteCoord(pt) {
+  return !!pt && typeof pt.lat === 'number' && typeof pt.lng === 'number' &&
+    Number.isFinite(pt.lat) && Number.isFinite(pt.lng) &&
+    pt.lat >= -90 && pt.lat <= 90 && pt.lng >= -180 && pt.lng <= 180;
+}
+
 // =====================================================================================
 // getRoute — الواجهة الموحدة الوحيدة المستخدمة في باقي المشروع (المهمة 4)
 // =====================================================================================
 // origin/destination: {lat, lng} (WGS84 - نفس نظام الإحداثيات المعتمد في كل المشروع)
-// بيرجع: {distanceKm, durationMinutes, polyline, provider}
-// بيرمي Error لو فشل (صفر Fallback، صفر حساب بالخط المستقيم بدل منه - القرار المعتمد صراحة)
+// بيرجع: {distanceKm, durationMinutes, polyline, provider} - نفس الشكل بالحرف زي قبل الـ
+// Hardening Pass (P4.1) - صفر تغيير في الـ API العامة أو أسماء الحقول.
+// بيرمي Error لو فشل (صفر Fallback، صفر حساب بالخط المستقيم بدل منه - القرار المعتمد صراحة).
+// جديد (Hardening Pass P4.1): "فشل" دلوقتي بيشمل كمان استجابة OSRM ناجحة (HTTP 200, code=Ok)
+// لكن بيانات المسافة/المدة فيها مفقودة أو غير رقمية - قبل الـ Hardening كان ده بيرجع كنتيجة
+// "ناجحة" فيها distanceKm=NaN (كان بيتفلتر بعدين في orders.js بس مايتفلترش في rides.js لو
+// السيناريو ده حصل هناك)، دلوقتي getRoute() نفسها بترفضه من الأساس بدل ما تسيبه للـ caller.
 export async function getRoute(origin, destination) {
+  if (!isFiniteCoord(origin) || !isFiniteCoord(destination)) {
+    console.error('[routing] getRoute: invalid input coordinates', { origin, destination });
+    throw new Error('routing-failed: invalid-coordinates');
+  }
+
   const key = _cacheKey(origin, destination);
   if (_routeCache.has(key)) return _routeCache.get(key);
+  if (_routeInFlight.has(key)) return _routeInFlight.get(key); // طلب شغال بالفعل لنفس النقطتين - منضاعفش الطلب
 
-  const url = `${OSRM_BASE_URL}/route/v1/${OSRM_PROFILE}/${origin.lng},${origin.lat};${destination.lng},${destination.lat}?overview=full&geometries=polyline&steps=false`;
+  const reqPromise = (async () => {
+    const url = `${OSRM_BASE_URL}/route/v1/${OSRM_PROFILE}/${origin.lng},${origin.lat};${destination.lng},${destination.lat}?overview=full&geometries=polyline&steps=false`;
 
-  // Timeout واضح (المهمة 11) - حتى لا يظل إنشاء الرحلة معلقًا لو الـ Routing Provider بطيء
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), ROUTING_TIMEOUT_MS);
-  let res;
-  try {
-    res = await fetch(url, { signal: controller.signal });
-  } catch (e) {
+    // Timeout واضح (المهمة 11) - حتى لا يظل إنشاء الرحلة معلقًا لو الـ Routing Provider بطيء
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), ROUTING_TIMEOUT_MS);
+    let res;
+    try {
+      res = await fetch(url, { signal: controller.signal });
+    } catch (e) {
+      clearTimeout(timeoutId);
+      const reason = e.name === 'AbortError' ? 'timeout' : (e.message || 'network-error');
+      console.error('[routing] getRoute: request failed -', reason);
+      throw new Error('routing-failed: ' + reason);
+    }
     clearTimeout(timeoutId);
-    throw new Error('routing-failed: ' + (e.name === 'AbortError' ? 'timeout' : (e.message || 'network-error')));
-  }
-  clearTimeout(timeoutId);
-  if (!res.ok) throw new Error('routing-failed: http-' + res.status);
+    if (!res.ok) {
+      console.error('[routing] getRoute: OSRM returned http-' + res.status);
+      throw new Error('routing-failed: http-' + res.status);
+    }
 
-  const data = await res.json();
-  if (data.code !== 'Ok' || !Array.isArray(data.routes) || !data.routes[0]) {
-    throw new Error('routing-failed: no-route');
-  }
-  const route = data.routes[0];
+    // جديد (Hardening Pass P4.1 - البند 3): res.json() ممكن يفشل لو الاستجابة مش JSON صالح
+    // خالص (Malformed Response) - قبل كده كانت بترمي Exception طبيعي بيتلقطه try/catch العميل
+    // برضه (زي أي Error تاني)، لكن برسالة غير موحّدة مع باقي أخطاء routing-failed هنا.
+    let data;
+    try {
+      data = await res.json();
+    } catch (e) {
+      console.error('[routing] getRoute: malformed JSON response from OSRM');
+      throw new Error('routing-failed: malformed-response');
+    }
 
-  // ===== Standard Routing Response (المهمة 4) — نفس الشكل الموحد بغض النظر عن المزود
-  // الفعلي وراها، عشان باقي المشروع محتاجش يعرف تفاصيل OSRM تحديدًا =====
-  const result = {
-    distanceKm: Math.round((route.distance / 1000) * 100) / 100, // Actual Road Distance
-    durationMinutes: Math.round(route.duration / 60),
-    polyline: route.geometry, // Encoded Polyline (Google Polyline Algorithm, precision 5) - نفس المهمة 5
-    provider: PROVIDER_NAME,
-  };
+    if (data.code !== 'Ok' || !Array.isArray(data.routes) || !data.routes[0]) {
+      console.error('[routing] getRoute: no valid route in OSRM response (code=' + data.code + ')');
+      throw new Error('routing-failed: no-route');
+    }
+    const route = data.routes[0];
 
-  if (_routeCache.size >= CACHE_MAX_ENTRIES) {
-    const oldestKey = _routeCache.keys().next().value;
-    _routeCache.delete(oldestKey);
+    // ===== Standard Routing Response (المهمة 4) — نفس الشكل الموحد بغض النظر عن المزود
+    // الفعلي وراها، عشان باقي المشروع محتاجش يعرف تفاصيل OSRM تحديدًا =====
+    const distanceKm = Math.round((route.distance / 1000) * 100) / 100; // Actual Road Distance
+    const durationMinutes = Math.round(route.duration / 60);
+
+    // جديد (Hardening Pass P4.1 - البند 4): Distance/Duration Sanity - لازم تكونوا أرقام
+    // finite وغير سالبة قبل أي إرجاع كـ"نجاح". لو route.distance/route.duration مفقودين أو
+    // مش رقميين (استجابة OSRM فيها code=Ok بس بيانات مسار تالفة)، الحساب فوق بيرجع NaN - الفحص
+    // هنا بيمنعه من الوصول للـ caller كنتيجة سليمة. صفر تحويل لأي فشل هنا لـ 0 - الفشل يفضل
+    // فشل (Error)، والـ caller (orders.js/rides.js) هو اللي يقرر fallback pricing/behavior.
+    if (!Number.isFinite(distanceKm) || distanceKm < 0 || !Number.isFinite(durationMinutes) || durationMinutes < 0) {
+      console.error('[routing] getRoute: non-finite or negative distance/duration in OSRM response');
+      throw new Error('routing-failed: invalid-route-data');
+    }
+
+    const result = {
+      distanceKm,
+      durationMinutes,
+      polyline: route.geometry, // Encoded Polyline (Google Polyline Algorithm, precision 5) - نفس المهمة 5
+      provider: PROVIDER_NAME,
+    };
+
+    if (_routeCache.size >= CACHE_MAX_ENTRIES) {
+      const oldestKey = _routeCache.keys().next().value;
+      _routeCache.delete(oldestKey);
+    }
+    _routeCache.set(key, result);
+    return result;
+  })();
+
+  _routeInFlight.set(key, reqPromise);
+  try {
+    return await reqPromise;
+  } finally {
+    _routeInFlight.delete(key);
   }
-  _routeCache.set(key, result);
-  return result;
 }
 
 // =====================================================================================

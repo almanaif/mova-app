@@ -44,11 +44,30 @@ function registerArabicRtlPlugin() {
     return false;
   }
 }
+// P3 (Controlled Map Fix): لو المحاولتين (فورية + window.load) فشلوا فعلاً، النصوص العربية على
+// الخريطة هتظهر مفككة من غير ما المستخدم يعرف السبب. تحذير واحد بس، وبس لو فشل حقيقي مؤكد
+// (status === 'error') - أبدًا وقت 'loading' (لسه ممكن ينجح، شبكة بطيئة) ولا وقت 'loaded' (نجح).
+// showToast مستوردة بالفعل فوق (سطر 8) وبتُستخدم فعليًا في نفس الملف (مثلاً أخطاء admin map) -
+// صفر مشكلة ترتيب تحميل، فمفيش داعي لأي آلية جديدة.
+let rtlFailureWarned = false; // Session flag - يمنع تكرار التحذير أكتر من مرة واحدة
+function checkRtlPluginOutcome() {
+  if (rtlFailureWarned) return;
+  if (typeof maplibregl === 'undefined' || !maplibregl.getRTLTextPluginStatus) return;
+  if (maplibregl.getRTLTextPluginStatus() === 'error') {
+    rtlFailureWarned = true;
+    showToast('تعذر تحميل دعم اللغة العربية للخريطة. قد تظهر بعض أسماء الأماكن بشكل غير صحيح.', 'err');
+  }
+}
 // محاولة فورية وقت تحميل الموديول (المتوقع إن maplibregl يبقى متاح وقتها، زي باقي كود الملف).
 // لو لأي سبب (توقيت تحميل السكريبتات) لسه مش متاح، أو لو المحاولة الأولى فشلت (status 'error'),
 // بنجرب تاني عند اكتمال تحميل الصفحة - Safety net بسيط بدون أي polling أو تكرار غير محدود.
-if (!registerArabicRtlPlugin()) {
-  window.addEventListener('load', () => registerArabicRtlPlugin(), { once: true });
+if (registerArabicRtlPlugin()) {
+  setTimeout(checkRtlPluginOutcome, 4000); // وقت معقول لإعطاء تحميل سكريبت الـ CDN فرصة يخلص
+} else {
+  window.addEventListener('load', () => {
+    registerArabicRtlPlugin();
+    setTimeout(checkRtlPluginOutcome, 4000);
+  }, { once: true });
 }
 
 // ===== Controls موحّدة لكل خرائط المشروع (Zoom + Compass + Scale) =====
@@ -107,13 +126,33 @@ function toLngLat(pt) {
   return [pt.lng, pt.lat];
 }
 
-// ماركر بإيموجي (بديل L.divIcon) - بيرجع الـ Marker instance عشان تقدر تحرّكه/تشيله بعدين.
-export function createEmojiMarker(map, pt, emoji, size = 26) {
+// P5 (Controlled Map Fix): استبدال الإيموجي بنظام SVG icons.js الموحّد. تعيين كل نوع Marker
+// لأيقونة موجودة فعليًا (فحصت icons.js أولًا - bike/map-pin/store كلهم موجودين، صفر أيقونة
+// مخترعة) + لون من Design Tokens الموجودة (:root في styles.css) بدل ما يكون اللون جوه الإيموجي
+// نفسه. الألوان اتخيرت عشان تفضل متمايزة في كل مكان بيظهروا فيه مع بعض على نفس الخريطة
+// (مثلاً trackMap بيعرض merchant+customer+driver مع بعض، وride-status بيعرض driver+pickup+dropoff
+// مع بعض) - نفس فكرة تمايز 🏪/📍/🛵/🟢/🔴 القديمة بس بألوان بدل إيموجي مختلف شكليًا.
+const MARKER_ICON_MAP = {
+  driver:   { icon: 'bike',    color: 'var(--color-secondary)' }, // بديل 🛵
+  customer: { icon: 'map-pin', color: 'var(--color-primary)'   }, // بديل 📍
+  merchant: { icon: 'store',   color: 'var(--color-warning)'   }, // بديل 🏪
+  pickup:   { icon: 'map-pin', color: 'var(--color-success)'   }, // بديل 🟢
+  dropoff:  { icon: 'map-pin', color: 'var(--color-danger)'    }, // بديل 🔴
+};
+
+// ماركر بأيقونة SVG (بديل L.divIcon، ونسخة P5 من createEmojiMarker القديمة) - بيرجع نفس
+// الـ maplibregl.Marker instance بالظبط زي الأول (setLngLat/addTo/remove كلهم شغالين بنفس
+// الشكل تمامًا) - الفرق الوحيد إن آخر باراميتر بقى "نوع" (driver/customer/merchant/pickup/dropoff)
+// بدل نص إيموجي خام. anchor فضل 'center' زي الأصل بالظبط (صفر تغيير في مكان تموضع الماركر
+// فوق الإحداثية - قرار محافظ عشان نضمن صفر Regression بصري من غير اختبار على متصفح حقيقي).
+export function createMapMarker(map, pt, type, size = 26) {
   if (!map || typeof maplibregl === 'undefined') return null;
+  const cfg = MARKER_ICON_MAP[type];
+  if (!cfg) return null; // نوع غير معروف - نفس سلوك الأصل لو الإيموجي فاضي (صفر Marker يترسم)
   const el = document.createElement('div');
-  el.style.fontSize = size + 'px';
-  el.style.lineHeight = '1';
-  el.textContent = emoji;
+  el.className = 'map-marker';
+  el.style.color = cfg.color; // stroke="currentColor" جوه icon() بيورث اللون ده
+  el.innerHTML = icon(cfg.icon, size);
   return new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat(toLngLat(pt)).addTo(map);
 }
 
@@ -208,6 +247,12 @@ function locPickerUpdateAddress(lat, lng) {
     locPickerRenderAddress(geo.address ? 'ok' : 'error', geo);
   });
 }
+// P2 (Controlled Map Fix): كانت reverseGeocode بتتنفذ فورًا مع كل moveend - تحريك سريع متتالي
+// (المستخدم بيقلّب على أماكن قريبة بسرعة) كان بيطلق عدة طلبات Nominatim في ثوانٍ معدودة من غير
+// أي حد. نفس debounce() الموجودة بالفعل فوق (مستخدمة في locPickerDebouncedSearch) - صفر تطبيق
+// Debounce تاني غير متوافق. locPickerGeocodeSeq (Race Guard) والـ Cache جوه routing.js فضلوا
+// زي ما هما بالظبط - الـ Debounce بس بيأخر إطلاق الطلب نفسه لحد ما التحريك يهدى شوية (400ms).
+const locPickerDebouncedUpdateAddress = debounce(locPickerUpdateAddress, 400);
 
 // ===== نتائج البحث (مشتركة بين وضع العنوان ووضع الفئة - نفس الـ UI، مصدر بيانات مختلف) =====
 function locPickerResultsEl() { return document.getElementById('loc-picker-results'); }
@@ -364,7 +409,7 @@ export function openLocationPicker(opts = {}) {
     locPickerMap.on('moveend', () => {
       const c = locPickerMap.getCenter();
       locPickerCurrentLoc = [c.lat, c.lng];
-      locPickerUpdateAddress(c.lat, c.lng);
+      locPickerDebouncedUpdateAddress(c.lat, c.lng);
     });
   });
 }
@@ -511,13 +556,13 @@ export function initTrackMap(ordData, status) {
   window.trackMap.on('load', () => {
     markMapLoaded('tracking-map');
     if (window.trackMap) window.trackMap.resize(); // تأكيد الأبعاد لو الحاوية كانت لسه بتتحرك/Layout بيستقر
-    createEmojiMarker(window.trackMap, storeLoc, '🏪');
+    createMapMarker(window.trackMap, storeLoc, 'merchant');
     trackFitPoints.push(storeLoc);
     const custLoc = (typeof ordData?.customerLat === 'number' && typeof ordData?.customerLng === 'number')
       ? [ordData.customerLat, ordData.customerLng]
       : (window.userLat ? [window.userLat, window.userLng] : null);
     if (custLoc) {
-      window.customerMarker = createEmojiMarker(window.trackMap, custLoc, '📍');
+      window.customerMarker = createMapMarker(window.trackMap, custLoc, 'customer');
       trackFitPoints.push(custLoc);
     }
     // قبل الاستلام: مسار متجر -> عميل (لو الحالة فعلًا في مرحلة يبقى فيها المسار منطقي).
@@ -550,7 +595,7 @@ export function initTrackMap(ordData, status) {
         if (isStale && POST_PICKUP_STATUSES.includes(status)) { updateTrackEtaDisplay('driver-stale'); return; }
         const driverPos = [d.lat, d.lng];
         if (!window.driverMarker) {
-          window.driverMarker = createEmojiMarker(window.trackMap, driverPos, '🛵');
+          window.driverMarker = createMapMarker(window.trackMap, driverPos, 'driver');
         } else {
           window.driverMarker.setLngLat([d.lng, d.lat]); // تحديث نقطة موجودة - صفر Marker جديد (البند 8/9 - مفيش سرقة كاميرا)
         }
@@ -632,7 +677,7 @@ export function toggleDriverMap() {
         window.drvMap.on('load', () => {
           markMapLoaded('driver-map');
           if (typeof window.driverLat === 'number' && typeof window.driverLng === 'number') {
-            drvSelfMarker = createEmojiMarker(window.drvMap, [window.driverLat, window.driverLng], '🛵');
+            drvSelfMarker = createMapMarker(window.drvMap, [window.driverLat, window.driverLng], 'driver');
           }
           if (driverMapRideData) applyDriverMapRideMode(driverMapRideData);
           if (window.drvMap) window.drvMap.resize(); // تأكيد الأبعاد فور التحميل - منع Canvas رمادي/فاضي
@@ -654,14 +699,14 @@ export function toggleDriverMap() {
 // تحرّك نقطة المندوب على خريطته الشخصية، سواء في وضع Idle أو Ride.
 export function updateDriverSelfLocation(lat, lng) {
   if (!window.drvMap) return;
-  if (!drvSelfMarker) { drvSelfMarker = createEmojiMarker(window.drvMap, [lat, lng], '🛵'); }
+  if (!drvSelfMarker) { drvSelfMarker = createMapMarker(window.drvMap, [lat, lng], 'driver'); }
   else { drvSelfMarker.setLngLat([lng, lat]); }
 }
 
 function applyDriverMapRideMode(rideData) {
   if (!window.drvMap) return;
   if (drvPickupMarker) { drvPickupMarker.remove(); drvPickupMarker = null; }
-  if (rideData?.pickup) drvPickupMarker = createEmojiMarker(window.drvMap, rideData.pickup, '🟢');
+  if (rideData?.pickup) drvPickupMarker = createMapMarker(window.drvMap, rideData.pickup, 'pickup');
   if (rideData?.routeGeometry) drawEncodedRoute(window.drvMap, rideData.routeGeometry, 'drv-ride-route');
 }
 
@@ -684,11 +729,88 @@ export function setDriverMapIdleMode() {
 // =====================================================================================
 // المناديب (زي ما هي) + المشاوير الجارية فوقها (Pickup/Dropoff/Route/Driver Live Location) -
 // كله من البيانات المخزّنة بالفعل، صفر Routing جديد (routeGeometry مخزّنة من وقت إنشاء المشوار).
+//
+// P1 (Controlled Map Fix): كانت initAdminMap() بتهدم الخريطة بالكامل (map.remove()) وتبنيها
+// من الصفر بكل الـ Markers مع كل تحديث Firestore - وده بيحصل كتير جدًا فعليًا، لأن admin.js
+// بينده initAdminMap() من Listener على مجموعة users كاملة من غير فلترة (أي تحديث GPS لأي
+// مندوب بيطلق onSnapshot) + Listener على المشاوير الجارية. النتيجة كانت: Flicker + فقدان
+// Zoom/Pan اللي الأدمن مظبطه يدوي + إعادة تحميل Style/Tiles بلا داعي مع كل نبضة GPS.
+// الحل: الخريطة (WebGL instance) بتتعمل مرة واحدة بس. بعد كده أي نداء لـ initAdminMap()
+// بيعمل "تسوية" (Reconciliation) للـ Markers الموجودة فعليًا بدل هدم/بناء - بمفتاح ثابت
+// (driver.id لكل مندوب، ride.id لكل مشوار) عشان نعرف مين لسه موجود، مين جديد، ومين اختفى.
 let admRouteSources = [];
+let admDriverMarkers = new Map(); // driverId (users/{uid}.id) -> maplibregl.Marker
+let admRideMarkers = new Map();   // rideId -> { pickup, dropoff, driver, routeSourceId }
+let admMapLatestDrivers = [];     // آخر بيانات وصلت (لو اتنده initAdminMap قبل ما أول تحميل يخلص)
+let admMapLatestRides = [];
+
+// تسوية Markers المناديب: تحديث موجود (setLngLat)، إنشاء جديد بس للي مش موجود، حذف اللي اختفى
+// (المندوب فقد إحداثياته أو اتشال من القايمة تمامًا) - نفس منطق trackMap/driverMap الحالي.
+function admReconcileDrivers(drivers) {
+  if (!window.admMap) return;
+  const seen = new Set();
+  drivers.forEach(d => {
+    if (!d || d.id == null || typeof d.lat !== 'number' || typeof d.lng !== 'number') return;
+    seen.add(d.id);
+    const existing = admDriverMarkers.get(d.id);
+    if (existing) existing.setLngLat([d.lng, d.lat]);
+    else admDriverMarkers.set(d.id, createMapMarker(window.admMap, [d.lat, d.lng], 'driver'));
+  });
+  admDriverMarkers.forEach((marker, id) => {
+    if (!seen.has(id)) { marker.remove(); admDriverMarkers.delete(id); }
+  });
+}
+
+// تسوية Markers/مسار المشاوير: pickup/dropoff/routeGeometry ثابتين بعد الإنشاء (Immutable -
+// موثّق في rides.js) فبيتعملوا مرة واحدة بس لكل ride.id، driverLocation بيتحدّث (setLngLat)
+// لأنه بيتغيّر مع كل نبضة GPS، والمشوار اللي يخلص/يتلغي (يختفي من نتيجة الـ Query أصلًا لأن
+// Listener admin.js فلترته على status محدد) بتتشال كل Markers بتاعته + مصدر المسار.
+function admReconcileRides(rides) {
+  if (!window.admMap) return;
+  const seen = new Set();
+  rides.forEach(r => {
+    if (!r || r.id == null) return; // صفر ID = مينفعش نتابعه بين التحديثات - يترفض بأمان
+    seen.add(r.id);
+    let entry = admRideMarkers.get(r.id);
+    if (!entry) { entry = { pickup: null, dropoff: null, driver: null, routeSourceId: null }; admRideMarkers.set(r.id, entry); }
+    if (r.pickup && !entry.pickup) entry.pickup = createMapMarker(window.admMap, r.pickup, 'pickup', 22);
+    if (r.dropoff && !entry.dropoff) entry.dropoff = createMapMarker(window.admMap, r.dropoff, 'dropoff', 22);
+    if (r.driverLocation) {
+      if (entry.driver) entry.driver.setLngLat([r.driverLocation.lng, r.driverLocation.lat]);
+      else entry.driver = createMapMarker(window.admMap, r.driverLocation, 'driver', 22);
+    } else if (entry.driver) { entry.driver.remove(); entry.driver = null; }
+    if (r.routeGeometry && !entry.routeSourceId) {
+      const sid = 'adm-ride-route-' + r.id;
+      if (drawEncodedRoute(window.admMap, r.routeGeometry, sid)) { entry.routeSourceId = sid; admRouteSources.push(sid); }
+    }
+  });
+  admRideMarkers.forEach((entry, id) => {
+    if (seen.has(id)) return;
+    if (entry.pickup) entry.pickup.remove();
+    if (entry.dropoff) entry.dropoff.remove();
+    if (entry.driver) entry.driver.remove();
+    if (entry.routeSourceId) { removeRoute(window.admMap, entry.routeSourceId); admRouteSources = admRouteSources.filter(s => s !== entry.routeSourceId); }
+    admRideMarkers.delete(id);
+  });
+}
+
 export function initAdminMap(drivers = [], rides = []) {
-  if (window.admMap) { window.admMap.remove(); window.admMap = null; }
+  admMapLatestDrivers = drivers; admMapLatestRides = rides;
+  if (window.admMap) {
+    // الخريطة موجودة بالفعل - تسوية تدريجية بس، صفر remove()/rebuild (P1). resize() لسه لازمة
+    // هنا لأن الأدمن ممكن يكون سايب تبويب الخريطة (الحاوية بقت display:none) ورجعلها تاني -
+    // نفس السبب بالظبط اللي driver map بتعمله في toggleDriverMap() للحالة المطابقة.
+    window.admMap.resize();
+    if (window.admMap.loaded && window.admMap.loaded()) {
+      admReconcileDrivers(drivers);
+      admReconcileRides(rides);
+    }
+    // لو لسه مش loaded (نادر جدًا - أول نداء لسه ماخلصش)، الـ 'load' handler تحت هيطبّق آخر
+    // بيانات وصلت (admMapLatestDrivers/Rides) أول ما يخلص - صفر بيانات ضايعة.
+    return;
+  }
   if (typeof maplibregl === 'undefined') return;
-  admRouteSources = [];
+  admDriverMarkers = new Map(); admRideMarkers = new Map(); admRouteSources = [];
   setTimeout(() => {
     window.admMap = new maplibregl.Map({
       container: 'admin-map', style: OPENFREEMAP_STYLE,
@@ -700,18 +822,8 @@ export function initAdminMap(drivers = [], rides = []) {
     window.admMap.on('load', () => {
       markMapLoaded('admin-map');
       window.admMap.resize();
-      drivers.forEach(d => {
-        if (typeof d.lat === 'number' && typeof d.lng === 'number') createEmojiMarker(window.admMap, [d.lat, d.lng], '🛵');
-      });
-      rides.forEach((r, i) => {
-        if (r.pickup) createEmojiMarker(window.admMap, r.pickup, '🟢', 22);
-        if (r.dropoff) createEmojiMarker(window.admMap, r.dropoff, '🔴', 22);
-        if (r.driverLocation) createEmojiMarker(window.admMap, r.driverLocation, '🛵', 22);
-        if (r.routeGeometry) {
-          const sid = 'adm-ride-route-' + i;
-          if (drawEncodedRoute(window.admMap, r.routeGeometry, sid)) admRouteSources.push(sid);
-        }
-      });
+      admReconcileDrivers(admMapLatestDrivers);
+      admReconcileRides(admMapLatestRides);
     });
   }, 150);
 }
@@ -737,16 +849,16 @@ export function initRideStatusMap(rideData) {
     if (!rsMap) return; // ممكن اتشالت قبل ما الـ load event يحصل (تغيير سريع للشاشة)
     markMapLoaded('ride-status-map');
     rsMap.resize();
-    createEmojiMarker(rsMap, rideData.pickup, '🟢');
-    if (rideData.dropoff) createEmojiMarker(rsMap, rideData.dropoff, '🔴');
+    createMapMarker(rsMap, rideData.pickup, 'pickup');
+    if (rideData.dropoff) createMapMarker(rsMap, rideData.dropoff, 'dropoff');
     if (rideData.routeGeometry) drawEncodedRoute(rsMap, rideData.routeGeometry, 'rs-route');
     fitToPoints(rsMap, [rideData.pickup, rideData.dropoff].filter(Boolean));
-    if (rideData.driverLocation) rsDriverMarker = createEmojiMarker(rsMap, rideData.driverLocation, '🛵');
+    if (rideData.driverLocation) rsDriverMarker = createMapMarker(rsMap, rideData.driverLocation, 'driver');
   });
 }
 export function updateRideStatusDriverLocation(loc) {
   if (!rsMap || !loc) return;
-  if (!rsDriverMarker) { rsDriverMarker = createEmojiMarker(rsMap, loc, '🛵'); }
+  if (!rsDriverMarker) { rsDriverMarker = createMapMarker(rsMap, loc, 'driver'); }
   else { rsDriverMarker.setLngLat([loc.lng, loc.lat]); }
 }
 export function clearRideStatusMap() {
@@ -767,7 +879,7 @@ export function initDriverRegLocationMap(lat, lng) {
   addStandardControls(window._locMap);
   markMapLoading('loc-map');
   attachMapErrorHandling(window._locMap, () => showMapErrorMsg('loc-map', 'تعذر تحميل الخريطة'));
-  window._locMap.on('load', () => { markMapLoaded('loc-map'); window._locMap.resize(); createEmojiMarker(window._locMap, [lat, lng], '📍'); });
+  window._locMap.on('load', () => { markMapLoaded('loc-map'); window._locMap.resize(); createMapMarker(window._locMap, [lat, lng], 'customer'); });
 }
 
 // ===== تصفير أعلام المتابعة عند تسجيل الخروج (بيتنفذ من utils.js عبر clearAllListeners) =====
@@ -775,6 +887,11 @@ export function registerMapsResets() {
   onListenersCleared(() => {
     trackDriverUnsub = null;
     drvSelfMarker = null; drvPickupMarker = null; driverMapRideData = null;
+    // P1: تسجيل الخروج = "هدم حقيقي" (زي ما اتطلب صراحة - الحالة الوحيدة اللي لسه بنعمل فيها
+    // remove() لخريطة الأدمن). صفر تسوية تدريجية هنا عمدًا - الجلسة خلصت فعلاً.
+    if (window.admMap) { window.admMap.remove(); window.admMap = null; }
+    admDriverMarkers = new Map(); admRideMarkers = new Map();
+    admMapLatestDrivers = []; admMapLatestRides = [];
     admRouteSources = [];
     clearRideStatusMap();
   });

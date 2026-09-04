@@ -27,7 +27,12 @@ function startAdminRidesListener() {
   const q = query(collection(db, 'rides'), where('status', 'in', ['driver_assigned', 'driver_arrived', 'in_progress']));
   adminRidesUnsub = onSnapshot(q, snap => {
     admMapRides = [];
-    snap.forEach(d => admMapRides.push(d.data()));
+    // P1 (Controlled Map Fix): مستندات rides مبتخزنش الـ ID بتاعها كحقل جوّاها (اتفحص فعليًا في
+    // rides.js - rideDoc مفيهاش id)، فـ d.data() لوحدها مالهاش مفتاح ثابت نقدر نتابع بيه نفس
+    // المشوار بين تحديث وتاني. إضافة id:d.id هنا ضرورية عشان initAdminMap() الجديدة (تسوية
+    // تدريجية بدل هدم/بناء) تقدر تعرف مشوار معيّن اتغيّر (تحديث) من مشوار اختفى (حذف Marker) -
+    // نفس النمط المستخدم بالفعل لمصفوفة admMapDrivers فوق بالظبط (سطر 86: {...d.data(), id: d.id}).
+    snap.forEach(d => admMapRides.push({ ...d.data(), id: d.id }));
     if (window.admMap) initAdminMap(admMapDrivers, admMapRides);
   });
 }

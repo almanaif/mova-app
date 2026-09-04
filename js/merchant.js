@@ -22,15 +22,23 @@ export function loadMerchantData() {
 // اتفتح المسار في firestore.rules Sprint اللي فات، ودلوقتي هنا أول واجهة فعلية بتستخدمه.
 async function refreshMerchantLocStatus() {
   const statusEl = document.getElementById('merch-loc-status');
+  const btnEl = document.getElementById('merch-loc-btn');
+  const titleEl = document.getElementById('merch-loc-title');
   if (!statusEl || !window.CU) return;
   try {
     const snap = await getDoc(doc(db, 'stores', window.CU.uid));
     const sd = snap.exists() ? snap.data() : null;
     if (sd && typeof sd.lat === 'number' && typeof sd.lng === 'number') {
+      if (titleEl) titleEl.textContent = 'موقع المتجر';
       statusEl.innerHTML = icon('check-circle', 12) + ' الموقع محدد - اضغط للتعديل';
+      if (btnEl) btnEl.classList.remove('menu-item--urgent');
       window._merchStoreLoc = [sd.lat, sd.lng];
     } else {
-      statusEl.textContent = 'لم يتم تحديد الموقع بعد - العملاء يشوفوا موقع افتراضي';
+      // جديد (P5 - Launch Polish): الحالة دي كانت شكلها زي أي حقل عادي غير مهم، مع إن مسافة
+      // التوصيل الفعلية (P4) بتتحسب من موقع المتجر - لسه صفر تغيير في منطق الحفظ/القراءة نفسه.
+      if (titleEl) titleEl.textContent = 'أكمل موقع متجرك لاستقبال طلبات التوصيل';
+      statusEl.innerHTML = icon('alert-triangle', 12) + ' لم يتم التحديد بعد - اضغط للتحديد الآن';
+      if (btnEl) btnEl.classList.add('menu-item--urgent');
       window._merchStoreLoc = null;
     }
   } catch (e) { /* Best-effort - فشل القراءة مايكسرش لوحة التاجر */ }

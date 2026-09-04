@@ -53,13 +53,13 @@ export function isWithinMaxDistance(distanceKm, pricingRideCfg) {
 // كل الكود من هنا لتحت هو أول تنفيذ حقيقي. لسه: صفر Dispatch، صفر Notification للمندوب،
 // صفر تغيير حالة بعد الإنشاء. الهدف الوحيد: العميل يحدد نقطتين، يشوف السعر، ويأكد.
 
-import { db, collection, addDoc, getDoc, getDocs, updateDoc, doc, query, where, runTransaction, arrayUnion, serverTimestamp } from './firebase.js';
+import { db, collection, addDoc, getDoc, getDocs, updateDoc, doc, query, where, runTransaction, arrayUnion, serverTimestamp, DEFAULT_LOC } from './firebase.js';
 import { showToast, showScreen, RIDE_ELIGIBLE_VEHICLES, onListenersCleared, onSnapshot } from './utils.js';
 import { getPricingConfig, calculateFare } from './pricing.js';
 import { _distMeters } from './driver.js';
 import { reverseGeocode } from './routing.js';
 import { getRoute } from './routing.js';
-import { createEmojiMarker, initRideStatusMap, updateRideStatusDriverLocation, clearRideStatusMap,
+import { createMapMarker, initRideStatusMap, updateRideStatusDriverLocation, clearRideStatusMap,
          setDriverMapRideMode, setDriverMapIdleMode, OPENFREEMAP_STYLE } from './maps.js';
 
 // أقصى عدد سائقين مرشحين لكل محاولة Dispatch - القيمة دي معمارية (جزء من التصميم المعتمد)
@@ -100,7 +100,13 @@ export function openRideRequest() {
   rrReset();
   if (typeof maplibregl === 'undefined') { showToast('تعذر تحميل الخريطة', 'err'); return; }
   if (rrMap) { rrMap.remove(); rrMap = null; }
-  const center = window.userLat && window.userLng ? [window.userLng, window.userLat] : [32.2715, 30.5965];
+  // Phase 2 (Controlled Map Fix): كان فيه رقم إحداثيات مكتوب يدويًا هنا ([32.2715, 30.5965])
+  // بدل ما يترقّ من DEFAULT_LOC المركزية في firebase.js (نفس القيمة بالظبط، لكن مصدرين
+  // منفصلين لنفس الحقيقة). دلوقتي نفس القيمة بترجع من DEFAULT_LOC نفسها (بترتيب [lat,lng]،
+  // فبنعكسها هنا [lng,lat] زي ما maplibregl محتاجها بالظبط - نفس التحويل toLngLat() بتعمله
+  // في maps.js، بس من غير ما نستورد الدالة نفسها عشان الملف ده يفضل مستقل عن maps.js
+  // زي ما كان قبل كده - أقل تعديل ممكن).
+  const center = window.userLat && window.userLng ? [window.userLng, window.userLat] : [DEFAULT_LOC[1], DEFAULT_LOC[0]];
   rrMap = new maplibregl.Map({ container: 'ride-request-map', style: OPENFREEMAP_STYLE, center, zoom: 15, attributionControl: false });
   rrMap.on('click', rrHandleMapClick);
 }
@@ -117,10 +123,10 @@ function rrHandleMapClick(e) {
   const { lat, lng } = e.lngLat;
   if (!rrPickup) {
     rrPickup = { lat, lng };
-    rrMarkerPickup = createEmojiMarker(rrMap, rrPickup, '🟢');
+    rrMarkerPickup = createMapMarker(rrMap, rrPickup, 'pickup');
   } else if (!rrDropoff) {
     rrDropoff = { lat, lng };
-    rrMarkerDropoff = createEmojiMarker(rrMap, rrDropoff, '🔴');
+    rrMarkerDropoff = createMapMarker(rrMap, rrDropoff, 'dropoff');
     rrComputePrice(); // النقطتين اتحددوا - نحسب المسافة والسعر فورًا
   }
   rrUpdateStepLabel();
@@ -653,9 +659,17 @@ function rsShowStatus(rideId, initialStatus) {
 // ===== تصفير أعلام المتابعة عند تسجيل الخروج =====
 // جديد (Phase 4B): rides.js ماكانش عنده تسجيل زي باقي الموديولات - ضروري دلوقتي عشان
 // الـ Listeners الجديدة (البانل + خريطة الحالة) متفضلش شغالة بعد تسجيل الخروج.
+// Phase 1 (Controlled Map Fix): rrMap (خريطة "طلب مشوار" - openRideRequest) كانت الخريطة
+// الوحيدة في المشروع اللي مش بتتصفّر عند تسجيل الخروج (كل باقي الخرائط بتتصفّر فعليًا في
+// registerMapsResets() جوه maps.js). لو المستخدم فتح شاشة طلب المشوار مرة واحدة بس في
+// الجلسة وبعدين سجّل خروج من غير ما يفتحها تاني، الـ WebGL context + الـ 'click' listener
+// (rrHandleMapClick) كانوا بيفضلوا حيّين في الذاكرة للأبد. الإصلاح هنا بس (نفس آلية
+// onListenersCleared الموجودة بالفعل جوه نفس الدالة) - صفر تعديل في maps.js، وصفر تصدير
+// لـ rrMap برّه الملف ده (يفضل private زي ما كان بالظبط).
 export function registerRidesResets() {
   onListenersCleared(() => {
     driverOfferUnsub = null; rsUnsub = null; darUnsub = null;
     activeRideId = null; activeRideStatus = null; rsMapInitialized = false;
+    if (rrMap) { rrMap.remove(); rrMap = null; }
   });
 }

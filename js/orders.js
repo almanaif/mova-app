@@ -235,10 +235,50 @@ export async function goCheckout() {
   try {
     const total = window.cart.reduce((a, c) => a + c.price * c.qty, 0);
     const comm = Math.round(total * window.commRate / 100);
+    const firstItem = window.cart[0];
+    const orderStoreId = firstItem?.merchantId || null;
+    const orderStoreName = firstItem?.storeName || 'متجر';
+    if (!orderStoreId) { showToast('حدث خطأ في تحديد المتجر', 'err'); return; }
+
+    // ===== P4 (Model B - Base + Distance): إحداثيات المتجر + مسافة الطريق الحقيقية لازم
+    // تتحسبوا قبل calculateFare() دلوقتي (بعد ما كانت بعدها تمامًا وقت التسعير كان Flat بحت).
+    // بنستخدم window.userLat/Lng مباشرة هنا (متأكدين فعلاً فوق أول الدالة) - صفر داعي ننتظر
+    // pickupLocation (اللي بيتبني تحت من geocoding منفصل تمامًا عن حساب المسافة).
+    // isValidCoord() زي ما كانت بالظبط: بترفض null/undefined، (0,0) الوهمية، وأي حاجة برا
+    // المدى الجغرافي الصحيح - صفر اختراع بيانات.
+    function isValidCoord(lat, lng) {
+      return typeof lat === 'number' && typeof lng === 'number' &&
+        Number.isFinite(lat) && Number.isFinite(lng) &&
+        !(lat === 0 && lng === 0) && // (0,0) إحداثية Sentinel شائعة لأخطاء البيانات - مش موقع حقيقي لتطبيق شغال في مصر
+        lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+    }
+    let storeLat = null, storeLng = null;
+    try {
+      const storeSnap = await getDoc(doc(db, 'stores', orderStoreId));
+      const sd = storeSnap.exists() ? storeSnap.data() : null;
+      if (sd && typeof sd.lat === 'number' && typeof sd.lng === 'number') { storeLat = sd.lat; storeLng = sd.lng; }
+    } catch (e) { /* Best-effort - فشل قراءة إحداثيات المتجر مايوقفش إنشاء الطلب */ }
+
+    // distanceKm: القيمة المخزّنة فعليًا في الطلب - null لحد ما route حقيقي ينجح فعلاً.
+    // مفيش straight-line، مفيش موقع مندوب، مفيش مركز خريطة كبديل، مفيش geocoding تلقائي هنا -
+    // لو المتجر من غير إحداثيات أو الـ Routing فشل، بتفضل null زي ما هي، صفر قيمة مُختلقة.
+    let distanceKm = null;
+    if (isValidCoord(storeLat, storeLng) && isValidCoord(window.userLat, window.userLng)) {
+      try {
+        const route = await getRoute({ lat: storeLat, lng: storeLng }, { lat: window.userLat, lng: window.userLng });
+        if (route && Number.isFinite(route.distanceKm) && route.distanceKm > 0) distanceKm = route.distanceKm;
+      } catch (e) { /* فشل Routing (Timeout/شبكة/إلخ) - distanceKm بيفضل null، إنشاء الطلب بيكمل عادي */ }
+    }
+    // effectiveDistanceKm: القيمة المُستخدمة في التسعير بس (مش المخزّنة) - 0 لو مفيش مسافة
+    // حقيقية متاحة. التمييز ده مقصود ومطلوب صراحة: distanceKm المخزّنة تفضل null (بيانات "مش
+    // معروفة")، effectiveDistanceKm بس بترجع صفر كافتراض تسعير آمن (baseFare+bookingFee فلات
+    // زي ما كانت بالظبط) - صفر تحويل لـ null إلى 0 في القيمة المخزّنة نفسها.
+    const effectiveDistanceKm = distanceKm !== null ? distanceKm : 0;
+
     let pricingSnapshot;
     try {
       const pricingCfg = await getPricingConfig();
-      pricingSnapshot = calculateFare(pricingCfg, 'delivery', {});
+      pricingSnapshot = calculateFare(pricingCfg, 'delivery', { distanceKm: effectiveDistanceKm });
     } catch (e) {
       // إعدادات التسعير لسه مش متحطة (settings/pricing) - نفشل بوضوح وأمان بدل ما نرجع
       // لرقم Hardcoded أو نكسر الشاشة برسالة خطأ غير مفهومة.
@@ -247,10 +287,6 @@ export async function goCheckout() {
       return;
     }
     const fee = pricingSnapshot.finalFare;
-    const firstItem = window.cart[0];
-    const orderStoreId = firstItem?.merchantId || null;
-    const orderStoreName = firstItem?.storeName || 'متجر';
-    if (!orderStoreId) { showToast('حدث خطأ في تحديد المتجر', 'err'); return; }
 
     // جديد: العنوان المخزّن من منتقي الموقع مايتستخدمش إلا لو لسه بيطابق آخر إحداثيات فعلية
     // (userLat/Lng) - لو getLocation() (GPS تلقائي) اشتغل تاني بعد كده وغيّرهم من غير ما
@@ -264,42 +300,6 @@ export async function goCheckout() {
       latitude: window.userLat, longitude: window.userLng,
       address: geo.address, city: geo.city, zone: geo.zone,
     };
-    // جديد (Sprint 3.7 - Store Location): وثائق /stores الحالية مفيهاش lat/lng على الإطلاق
-    // (اتفحصت فعليًا - صفر متجر عنده إحداثيات مسجلة دلوقتي)، فكل خرائط التوصيل كانت بترسم
-    // "المتجر" على نقطة ثابتة واحدة (STORE_LOC) لكل المتاجر - مش حقيقية. مفيش افتراض بيانات
-    // هنا: بنحاول نقرا lat/lng من وثيقة المتجر لو موجودة (Best-effort، مفيش تأثير لو مش
-    // موجودة)، ولو موجودة بتتحفظ على الطلب نفسه (زي customerLat/Lng بالظبط) عشان خريطة
-    // التتبع تستخدمها لو موجودة، وترجع تلقائيًا للنقطة الثابتة القديمة (fallback في maps.js)
-    // لو مش موجودة - صفر بيانات مُخترعة، وصفر كسر لأي متجر حالي.
-    let storeLat = null, storeLng = null;
-    try {
-      const storeSnap = await getDoc(doc(db, 'stores', orderStoreId));
-      const sd = storeSnap.exists() ? storeSnap.data() : null;
-      if (sd && typeof sd.lat === 'number' && typeof sd.lng === 'number') { storeLat = sd.lat; storeLng = sd.lng; }
-    } catch (e) { /* Best-effort - فشل قراءة إحداثيات المتجر مايوقفش إنشاء الطلب */ }
-
-    // ===== Phase 2B (نهائي) - Distance Plumbing فقط، معلوماتي بحت =====
-    // بيانات حقيقية بس، صفر اختراع: بنحسب المسافة بس لو storeLat/Lng حقيقيين فعلًا (مش null،
-    // مش صفر/صفر بالظبط - إحداثية Sentinel شائعة مش موقع حقيقي، ومش برا المدى الجغرافي
-    // الصحيح) ووجهة العميل المؤكدة كمان حقيقية بنفس المعيار. لو أي حاجة ناقصة أو فشل الـ
-    // Routing (Timeout/Network/أي سبب) - distanceKm بتفضل null زي ما الوثيقة القديمة بالظبط
-    // (مفيش قيمة افتراضية، مفيش Geocoding بديل، مفيش موقع مندوب كبديل) وإنشاء الطلب نفسه
-    // مايتأثرش خالص - نفس سلوك try/catch الموجود فوق لقراءة إحداثيات المتجر بالظبط.
-    // calculateFare() فوق اتنفذت واتحسب منها fee قبل السطر ده بالكامل - مفيش أي تأثير على
-    // السعر النهائي هنا ولا أي تعديل على pricing.js (البند 7 صراحة).
-    function isValidCoord(lat, lng) {
-      return typeof lat === 'number' && typeof lng === 'number' &&
-        Number.isFinite(lat) && Number.isFinite(lng) &&
-        !(lat === 0 && lng === 0) && // (0,0) إحداثية Sentinel شائعة لأخطاء البيانات - مش موقع حقيقي لتطبيق شغال في مصر
-        lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
-    }
-    let distanceKm = null;
-    if (isValidCoord(storeLat, storeLng) && isValidCoord(pickupLocation.latitude, pickupLocation.longitude)) {
-      try {
-        const route = await getRoute({ lat: storeLat, lng: storeLng }, { lat: pickupLocation.latitude, lng: pickupLocation.longitude });
-        if (route && Number.isFinite(route.distanceKm)) distanceKm = route.distanceKm;
-      } catch (e) { /* فشل Routing (Timeout/شبكة/إلخ) - distanceKm بيفضل null، إنشاء الطلب بيكمل عادي */ }
-    }
 
     const now = Date.now();
     // جديد (حماية رقم العميل - Option B): customerPhone متسابش هنا وقت الإنشاء خالص.
@@ -316,8 +316,10 @@ export async function goCheckout() {
       customerLat: window.userLat, customerLng: window.userLng,
       // جديد (Sprint 3.7): null لحد ما المتاجر تتجهز بإحداثيات حقيقية - راجع الشرح فوق
       storeLat, storeLng,
-      // جديد (Phase 2B نهائي): معلوماتي بحت لأغراض تسعير مستقبلي محتمل - مش مستخدمة في
-      // حساب fee فوق خالص وماتأثرش على أي سعر حالي. null لو الإحداثيات مش متوفرة/الـ Routing فشل.
+      // جديد (P4 - Model B): المسافة الحقيقية دي فعلاً دخلت في حساب fee فوق (عبر
+      // effectiveDistanceKm) لو كانت متاحة. null لو المتجر من غير إحداثيات أو الـ Routing
+      // فشل - بتفضل null بالظبط زي ما هي (مش 0)، فالتفرقة بين "معروفة" و"مش معروفة" واضحة
+      // في البيانات المخزّنة حتى لو التسعير استخدم 0 كافتراض آمن وقت الحساب.
       distanceKm,
       statusHistory: [
         { from: null, to: ORDER_STATUS.CREATED, at: now, by: { type: 'customer', uid: window.CU.uid } },
