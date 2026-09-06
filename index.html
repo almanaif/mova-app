@@ -312,13 +312,13 @@
     <button class="btn-p" onclick="submitRating()">إرسال التقييم</button>
   </div>
   <div id="track-cancel-box" style="display:none;padding:14px 14px 0"></div>
-  <div style="padding:14px"><button class="btn-p" onclick="showScreen('screen-customer')" style="background:var(--s)">رجوع للرئيسية</button></div>
+  <div style="padding:14px"><button class="btn-p" onclick="closeTrack()" style="background:var(--s)">رجوع للرئيسية</button></div>
 </div>
 
 <!-- ===== RIDE REQUEST (Phase 3A) ===== -->
 <div id="screen-ride-request" class="screen">
   <div class="track-hero" style="display:flex;align-items:center;gap:12px">
-    <button onclick="showScreen('screen-customer')" class="page-header__back"><span data-icon="arrow-right" data-size="18"></span></button>
+    <button onclick="rrClose()" class="page-header__back"><span data-icon="arrow-right" data-size="18"></span></button>
     <div><h2>اطلب مشوار</h2><p id="rr-step-label">اضغط على الخريطة لتحديد نقطة الانطلاق</p></div>
   </div>
   <div class="map-wrap"><div id="ride-request-map"></div></div>
@@ -347,10 +347,10 @@
 <!-- ===== RIDE STATUS (Phase 3B: Recovery + Phase 4B: خريطة حية + Route + ETA) ===== -->
 <div id="screen-ride-status" class="screen">
   <div class="track-hero" style="display:flex;align-items:center;gap:12px">
-    <button onclick="showScreen('screen-customer')" class="page-header__back"><span data-icon="arrow-right" data-size="18"></span></button>
+    <button onclick="rsCloseStatus();showScreen('screen-customer')" class="page-header__back"><span data-icon="arrow-right" data-size="18"></span></button>
     <div><h2>حالة المشوار</h2><p id="rs-status-label">جاري البحث عن سائق...</p></div>
   </div>
-  <div class="map-wrap" id="rs-map-wrap" style="display:none"><div id="ride-status-map"></div></div>
+  <div class="map-wrap" id="rs-map-wrap" style="display:none"><div id="ride-status-map"></div><button class="map-recenter-btn" onclick="recenterRideStatusMap()" aria-label="توسيط الخريطة" data-icon="map-pin" data-size="18"></button></div>
   <div class="map-card" id="rs-info-card" style="display:none">
     <div class="map-info-row"><span class="lbl">مدة الرحلة المتوقعة</span><span class="val" id="rs-trip-eta-val">--</span></div>
     <div class="map-info-row" id="rs-pickup-eta-row" style="display:none"><span class="lbl">وقت وصول المندوب</span><span class="val" id="rs-pickup-eta-val">--</span></div>
