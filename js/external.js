@@ -7,7 +7,7 @@
 import { db, collection, addDoc, getDoc, getDocs, updateDoc, doc, query, where, runTransaction, serverTimestamp } from './firebase.js';
 import { showToast, showScreen, RIDE_ELIGIBLE_VEHICLES, onListenersCleared, onSnapshot, closeModal } from './utils.js';
 import { getPricingConfig, calculateFare } from './pricing.js';
-import { _distMeters } from './driver.js';
+import { _distMeters, maybeStopGpsIfIdle } from './driver.js';
 import { createNotification } from './notifications.js';
 import { openLocationPicker } from './maps.js';
 
@@ -407,6 +407,12 @@ export function listenExternalOffers() {
 }
 
 let epActiveUnsub = null;
+// جديد (P8 - External Purchase GPS Lifecycle): مصدر الحقيقة الحي لـ "هل عند المندوب External
+// Purchase نشطة دلوقتي" - نفس فلسفة activeRideId/isDriverRideActive في rides.js بالحرف، لكن
+// هنا القيمة بتتحدّث من نفس الـ Query الحي الموجود بالفعل (epActiveUnsub تحت) بدل Listener
+// جديد. صفر Watcher/Timer/Query إضافي - استخدام لنتيجة onSnapshot الموجودة أصلًا.
+let _activeEpId = null;
+export function isDriverExternalActive() { return !!_activeEpId; }
 export function initDriverActiveExternalListener() {
   const activeId = window.CUD?.activeExternalPurchaseId;
   if (!activeId && !window.CU) return;
@@ -419,6 +425,13 @@ export function initDriverActiveExternalListener() {
   epActiveUnsub = onSnapshot(q, snap => {
     let active = null;
     snap.forEach(d => { if (!active) active = { id: d.id, ...d.data() }; });
+    // جديد (P8 - External Purchase GPS Lifecycle): نفس نبضة الـ Snapshot دي هي مصدر الحقيقة -
+    // لو مفيش External Purchase نشطة دلوقتي وكانت فيه واحدة قبل كده (اتسلّمت/اتلغت)، ولو
+    // المندوب حاطط نفسه Offline بالفعل ومفيش عنده طلب توصيل أو مشوار جاري كمان، نوقف GPS فورًا
+    // (زي stopDriverActiveRide في rides.js بالظبط) بدل ما يفضل شغال بلا داعي.
+    const wasActive = !!_activeEpId;
+    _activeEpId = active ? active.id : null;
+    if (wasActive && !_activeEpId) maybeStopGpsIfIdle();
     const panel = document.getElementById('ep-active-panel');
     if (!panel) return;
     if (!active) { panel.style.display = 'none'; return; }
@@ -461,6 +474,6 @@ export function reportBudgetExceededFromPanel() {
 // ===== Listener Registry Cleanup (نفس فلسفة registerRidesResets تمامًا) =====
 export function registerExternalResets() {
   onListenersCleared(() => {
-    epDriverOfferUnsub = null; epActiveUnsub = null; epUnsub = null; epCurrentId = null;
+    epDriverOfferUnsub = null; epActiveUnsub = null; epUnsub = null; epCurrentId = null; _activeEpId = null;
   });
 }

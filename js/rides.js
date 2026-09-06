@@ -56,11 +56,11 @@ export function isWithinMaxDistance(distanceKm, pricingRideCfg) {
 import { db, collection, addDoc, getDoc, getDocs, updateDoc, doc, query, where, runTransaction, arrayUnion, serverTimestamp, DEFAULT_LOC } from './firebase.js';
 import { showToast, showScreen, RIDE_ELIGIBLE_VEHICLES, onListenersCleared, onSnapshot } from './utils.js';
 import { getPricingConfig, calculateFare } from './pricing.js';
-import { _distMeters } from './driver.js';
+import { _distMeters, maybeStopGpsIfIdle } from './driver.js';
 import { reverseGeocode } from './routing.js';
 import { getRoute } from './routing.js';
-import { createMapMarker, initRideStatusMap, updateRideStatusDriverLocation, clearRideStatusMap,
-         setDriverMapRideMode, setDriverMapIdleMode, OPENFREEMAP_STYLE } from './maps.js';
+import { createMapMarker, initRideStatusMap, updateRideStatusDriverLocation, clearRideStatusMap, invalidateRideStatusRoute,
+         setDriverMapRideMode, setDriverMapIdleMode, addAttributionControl, OPENFREEMAP_STYLE } from './maps.js';
 
 // أقصى عدد سائقين مرشحين لكل محاولة Dispatch - القيمة دي معمارية (جزء من التصميم المعتمد)
 // مش تسعير، فمكانها هنا صح مش في settings/pricing.
@@ -106,8 +106,13 @@ export function openRideRequest() {
   // فبنعكسها هنا [lng,lat] زي ما maplibregl محتاجها بالظبط - نفس التحويل toLngLat() بتعمله
   // في maps.js، بس من غير ما نستورد الدالة نفسها عشان الملف ده يفضل مستقل عن maps.js
   // زي ما كان قبل كده - أقل تعديل ممكن).
-  const center = window.userLat && window.userLng ? [window.userLng, window.userLat] : [DEFAULT_LOC[1], DEFAULT_LOC[0]];
+  // جديد (P12.1 - GPS Truthy Check): كان "window.userLat && window.userLng" - truthy check
+  // عادي بيفشل لو القيمة الفعلية 0 (خط الاستواء/خط غرينتش - نادر لكن ممكن رياضيًا)، ومايرفضش
+  // NaN (NaN && NaN تقييمها false برضه بالمصادفة، لكن Infinity && Infinity تبقى true رغم إنها
+  // مش إحداثية صالحة). Number.isFinite() هي الفحص الصحيح فعليًا لصلاحية إحداثية GPS.
+  const center = Number.isFinite(window.userLat) && Number.isFinite(window.userLng) ? [window.userLng, window.userLat] : [DEFAULT_LOC[1], DEFAULT_LOC[0]];
   rrMap = new maplibregl.Map({ container: 'ride-request-map', style: OPENFREEMAP_STYLE, center, zoom: 15, attributionControl: false });
+  addAttributionControl(rrMap); // جديد (P12.1 - Map Attribution): نفس الـ Control الموحّد المستخدم في باقي الخرائط (bottom-left, compact) - الشاشة دي مش بتستخدم addStandardControls أصلًا (مفيش Nav/Scale control ليها قبل كده، ومنضفهمش هنا عشان نفضل مقصورين على الـ Attribution بس)
   rrMap.on('click', rrHandleMapClick);
 }
 
@@ -132,13 +137,36 @@ function rrHandleMapClick(e) {
   rrUpdateStepLabel();
 }
 
+// جديد (P11 Phase 2 - Race/Generation Guard): لكل محاولة حساب سعر رقم فريد. الزرار "إعادة
+// تحديد" (resetRideRequest) بيسمح للمستخدم يبدأ اختيار نقطتين جديدتين وrrComputePrice() لسه
+// شغالة (async - بتستنى Pricing Config + Routing) من المحاولة القديمة - لو ردّت المحاولة
+// القديمة بعد الجديدة، كانت هتكتب فوق rrDistanceKm/rrPricingSnapshot/الشاشة ببيانات نقطتين
+// مش هما المعروضين على الخريطة دلوقتي (وأخطر حاجة: تفعّل زرار التأكيد بسعر غلط).
+let _rrGen = 0;
 export function resetRideRequest() {
+  _rrGen++; // يُبطل فورًا أي rrComputePrice() لسه مستنية رد قديم من قبل الـ Reset ده
   if (rrMarkerPickup) { rrMarkerPickup.remove(); }
   if (rrMarkerDropoff) { rrMarkerDropoff.remove(); }
   rrReset();
 }
 
+// جديد (P10 - Ride Request Picker Map Leak، مؤكد من تقرير P9 ولسه موجود فعليًا في الكود قبل
+// الإصلاح ده): زرار "رجوع" في شاشة "اطلب مشوار" (index.html) كان بينادي showScreen() مباشرة -
+// نفس فئة الـ Bug اللي كانت في شاشتي تتبع الطلبات/المشاوير (closeTrack/rsCloseStatus)، لكن هنا
+// كانت لسه من غير إصلاح. النتيجة: rrMap (خريطة MapLibre + الـ 'click' listener المربوط بيها -
+// rrHandleMapClick) كانت بتفضل حيّة في الذاكرة لحد ما المستخدم يفتح شاشة طلب مشوار تانية (بتقفل
+// القديمة أوتوماتيك جوه openRideRequest) أو يعمل Logout (registerRidesResets). دلوقتي الزرار
+// بينادي rrClose() دي - نفس نمط closeTrack()/rsCloseStatus()/epCloseStatus() الموجود بالفعل
+// للشاشات التلاتة التانية، وبتستخدم resetRideRequest() الموجودة بالفعل (بتشيل الـ Markers) بدل
+// ما تخترع منطق تنظيف جديد.
+export function rrClose() {
+  resetRideRequest();
+  if (rrMap) { rrMap.remove(); rrMap = null; }
+  showScreen('screen-customer');
+}
+
 async function rrComputePrice() {
+  const myGen = ++_rrGen; // هذه المحاولة - أي كتابة لاحقة لازم تتأكد إنها لسه أحدث محاولة قبل ما تلمس الحالة/الشاشة
   const priceCard = document.getElementById('rr-price-card');
   const confirmBtn = document.getElementById('rr-confirm-btn');
   if (confirmBtn) confirmBtn.disabled = true;
@@ -156,8 +184,10 @@ async function rrComputePrice() {
   let pricingCfg;
   try {
     pricingCfg = await getPricingConfig();
+    if (myGen !== _rrGen) return; // اتبطلت أثناء الانتظار (Reset/محاولة جديدة) - متلمسش الحالة/الشاشة خالص
     if (!pricingCfg.ride) throw new Error('pricing-missing-ride');
   } catch (e) {
+    if (myGen !== _rrGen) return; // نفس المبدأ - رد (نجاح أو فشل) من محاولة قديمة متأثرش على أي حاجة حالية
     showToast('خدمة المشاوير غير متاحة حاليًا', 'err');
     console.error('[rides] pricing config missing:', e);
     resetRideRequest();
@@ -170,7 +200,9 @@ async function rrComputePrice() {
   let route;
   try {
     route = await getRoute(rrPickup, rrDropoff);
+    if (myGen !== _rrGen) return; // اتبطلت أثناء انتظار الـ Routing
   } catch (e) {
+    if (myGen !== _rrGen) return;
     console.error('[rides] routing failed:', e);
     showToast('تعذر حساب مسار الطريق حاليًا، حاول مرة أخرى', 'err');
     resetRideRequest();
@@ -485,6 +517,11 @@ export function updateDriverLocationForActiveRide(lat, lng) {
 let activeRideId = null;
 let activeRideStatus = null;
 let darUnsub = null;
+
+// جديد (Maps & Tracking Hardening - P0 GPS Lifecycle): بيستخدمها driver.js (maybeStopGpsIfIdle)
+// عشان يقرر هل المندوب لسه عنده مشوار جاري وقت ما يحاول يوقف GPS بعد ما يعمل Offline - لو
+// عنده مشوار جاري، GPS لازم يفضل شغال (التتبع لسه مطلوب) حتى لو حط نفسه Offline.
+export function isDriverRideActive() { return !!activeRideId; }
 const DAR_ACTION_LABELS = {
   [RIDE_STATUS.DRIVER_ASSIGNED]: 'وصلت لنقطة الانطلاق',
   [RIDE_STATUS.DRIVER_ARRIVED]: 'ابدأ الرحلة',
@@ -516,10 +553,30 @@ function watchDriverActiveRide(rideId) {
 
 function stopDriverActiveRide() {
   if (darUnsub) { darUnsub(); darUnsub = null; }
+  const finishedRideId = activeRideId; // نحتفظ بالـ id قبل ما نصفّره تحت - لازم للـ Self-Heal تحت
   activeRideId = null; activeRideStatus = null;
   const panel = document.getElementById('dar-panel');
   if (panel) panel.style.display = 'none';
   setDriverMapIdleMode(); // Driver Map يرجع تلقائيًا للوضع الطبيعي (زي ما اتطلب صراحة)
+  // جديد (P0 GPS Lifecycle): المشوار خلص (completed/cancelled/doc اتشال) - لو المندوب حاطط
+  // نفسه Offline بالفعل ومفيش عنده طلب توصيل جاري كمان، مفيش داعي GPS يفضل شغال بعد كده.
+  maybeStopGpsIfIdle();
+  // جديد (P10 - activeRideId Bug، نفس فئة activeOrderId المُصلحة في driver.js بالحرف):
+  // transitionRideStep() (فوق) بتفضّي users/{uid}.activeRideId في Firestore بس لما المندوب
+  // نفسه يعمل driverCompleteTrip() (completed). لو المشوار خلص بأي طريقة تانية - وصل هنا
+  // (stopDriverActiveRide) لأن snap.exists() بقت false أو status بقى مش من الحالات النشطة - من
+  // غير الإصلاح ده، activeRideId في Firestore كان هيفضل يشاور على مشوار منتهي للأبد، ويمنع
+  // المندوب (busy check) من قبول أي طلب/مشوار/مشترى خارجي تاني للأبد. الـ Self-Heal ذاتي تمامًا
+  // (المندوب بيعدّل مستنده الشخصي هو بس - مسموح بالفعل بالـ Rules الحالية بدون أي تعديل)، وبيتأكد
+  // إن activeRideId لسه بيشاور فعليًا على نفس المشوار ده بالظبط قبل ما يفضّيه (لو اتقبل مشوار
+  // تاني قبل ما نوصل هنا، مبيتلمسش خالص) - نفس ضمانات _healActiveOrderIdIfCancelled بالحرف.
+  if (finishedRideId && window.CU) {
+    const uRef = doc(db, 'users', window.CU.uid);
+    runTransaction(db, async (t) => {
+      const uSnap = await t.get(uRef);
+      if (uSnap.data()?.activeRideId === finishedRideId) t.update(uRef, { activeRideId: null });
+    }).catch(() => {});
+  }
 }
 
 function renderDriverActiveRidePanel(d) {
@@ -601,6 +658,18 @@ function rsShowRetry(show) {
 // Phase 4B: هل خريطة حالة المشوار اتبنت فعلاً لنفس المحاولة الحالية؟ (تُبنى مرة واحدة بس،
 // بعد كده كل Snapshot جديد بيحرّك نقطة المندوب بس - مش بيعيد بناء الخريطة كل تحديث)
 let rsMapInitialized = false;
+// جديد (P9 - Final Hardening، نفس الـ Bug اللي كان في زرار "رجوع للرئيسية" في شاشة تتبع
+// الطلبات - راجع closeTrack() في orders.js لنفس الشرح بالتفصيل): زرار الرجوع في شاشة حالة
+// المشوار (screen-ride-status) كان بينادي showScreen() مباشرة من غير ما يقفل rsUnsub
+// (Firestore Listener على rides/{rideId}) ولا rsMap (خريطة MapLibre) - نفس فئة التسريب
+// بالظبط. epCloseStatus() في external.js كانت فعلاً عاملة نفس الحاجة دي لـ External Purchase
+// (زرار "شاشة حالة طلب الشراء" بينادي epCloseStatus() قبل showScreen())، فده مجرد توحيد نفس
+// النمط الموجود بالفعل على الشاشة التالتة اللي كانت ناقصاه.
+export function rsCloseStatus() {
+  if (rsUnsub) { rsUnsub(); rsUnsub = null; }
+  rsCurrentRideId = null; rsMapInitialized = false;
+  clearRideStatusMap();
+}
 function rsSetMapVisible(show) {
   const wrap = document.getElementById('rs-map-wrap');
   if (wrap) wrap.style.display = show ? 'block' : 'none';
@@ -629,12 +698,21 @@ function rsUpdateEta(d) {
 // وبعد كده كل تحديث بيحرّك نقطة المندوب بس (driverLocation - Phase 4B، مش users/{driverId}).
 function rsUpdateMap(d) {
   if (!d.pickup) return;
+  // جديد (P9 - Final Hardening، Terminal State Resurrection): نفس فلسفة updateTrackDriverLocation
+  // في maps.js بالظبط (خريطة تتبع الطلبات) - لو المشوار وصل لحالة نهائية (تم/اتلغى)، منمنعش أي
+  // تحديث حي على ماركر المندوب خالص، حتى لو نبضة GPS متأخرة وصلت بموقع "أحدث" بعد التسليم/الإلغاء
+  // (rsUnsub نفسه مقصود يفضل شغال - مسؤول عن نص الحالة "تم الوصول ✅"/"تم إلغاء المشوار" لسه،
+  // بس من غير أي حركة تانية للماركر). rsSetMapVisible(true) لسه بيتنفذ عشان لو الخريطة كانت
+  // ظاهرة بالفعل وقت الانتهاء، تفضل زي ما هي (مش تختفي فجأة) بدل ما تتحدّث بموقع غلط.
+  const isTerminal = d.status === RIDE_STATUS.COMPLETED || d.status === RIDE_STATUS.CANCELLED;
   rsSetMapVisible(true);
+  if (isTerminal) invalidateRideStatusRoute(); // يبطل أي رد Routing ديناميكي لسه Pending من قبل الوصول لحالة نهائية (P12)
   if (!rsMapInitialized) {
+    if (isTerminal) return; // Late Snapshot وصل بحالة نهائية من غير ما الخريطة تتبني أصلًا - مفيش داعي نبنيها دلوقتي
     rsMapInitialized = true;
     initRideStatusMap(d);
-  } else if (d.driverLocation) {
-    updateRideStatusDriverLocation(d.driverLocation);
+  } else if (!isTerminal && d.driverLocation) {
+    updateRideStatusDriverLocation(d.driverLocation, d.status, d.pickup, d.dropoff);
   }
 }
 function rsShowStatus(rideId, initialStatus) {

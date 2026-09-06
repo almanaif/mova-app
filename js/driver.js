@@ -4,10 +4,11 @@ import { average, collection, count, db, doc, getAggregateFromServer, limit, ord
 import { SL, esc, escJs, normalizeStatus, onListenersCleared, onSnapshot, orderStatusBadge, secureCloudinaryUpload, setLoad, showScreen, showToast } from './utils.js';
 import { icon } from './icons.js';
 import { getNextRequestId } from './merchant.js';
-import { ORDER_STATUS, acceptOrderAsDriver, getDispatchQuery, transitionOrder } from './orders.js';
-import { updateDriverSelfLocation, initDriverRegLocationMap } from './maps.js';
-import { updateDriverLocationForActiveRide, initDriverActiveRideListener } from './rides.js';
-import { listenExternalOffers, initDriverActiveExternalListener } from './external.js';
+import { ORDER_STATUS, acceptOrderAsDriver, getDispatchQuery, transitionOrder, updateDriverLocationForOrder } from './orders.js';
+import { updateDriverSelfLocation, initDriverRegLocationMap, destroyDriverRegLocationMap } from './maps.js';
+import { updateDriverLocationForActiveRide, initDriverActiveRideListener, isDriverRideActive } from './rides.js';
+import { listenExternalOffers, initDriverActiveExternalListener, isDriverExternalActive } from './external.js';
+import { distMeters as _distMeters } from './geo-utils.js';
 
 // ===== GPS / LOCATION =====
 // جديد (Map Professionalization Sprint): معالجة أخطاء GPS كانت فاضية تمامًا (()=>{}) - يعني
@@ -31,6 +32,10 @@ export function getLocation() {
   showToast('جاري تحديد موقعك...', '');
   navigator.geolocation.getCurrentPosition(pos => {
     const {latitude:lat, longitude:lng, accuracy} = pos.coords;
+    // جديد (P9 - نفس فحص NaN/Infinity في startGPS تحت، بس هنا مهم بالإضافة لأن قيمة window.userLat/Lng
+    // دي بتتخزّن مباشرة جوه pickupLocation.latitude/longitude وقت إنشاء الطلب (goCheckout في
+    // orders.js) - قيمة فاسدة هنا هتكسر حساب المسافة/الـ Routing/الـ ETA للطلب بالكامل.
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) { showToast('تعذر تحديد موقعك، حاول مرة أخرى', 'err'); return; }
     window.userLat = lat; window.userLng = lng;
     // دقة ضعيفة جدًا (>200 متر) - نستخدم الموقع برضه (أفضل من مفيش حاجة) بس نوضح للمستخدم
     // إنها مش دقيقة عشان يقدر يصححها يدويًا لو محتاج (بدل ما نوهمه إنها دقة عالية)
@@ -43,12 +48,11 @@ export function getLocation() {
 
 // جديد: تحديث الموقع كان بيكتب على Firestore مع كل نبضة GPS (ممكن كل ثانية أو أقل).
 // دلوقتي بنكتب بس كل 10 ثواني على الأقل، أو لو المندوب اتحرك أكتر من 30 متر.
-export function _distMeters(lat1,lng1,lat2,lng2){
-  const R=6371000, toRad=d=>d*Math.PI/180;
-  const dLat=toRad(lat2-lat1), dLng=toRad(lng2-lng1);
-  const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)**2;
-  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
-}
+// P1 (توحيد المسافات): التنفيذ الفعلي اتنقل لـ geo-utils.js (موديول صفر Imports، تجنبًا لأي
+// Circular Import - راجع التعليق هناك للتفاصيل). _distMeters هنا Re-export بنفس الاسم القديم
+// بالظبط (مستوردة فوق مع باقي imports الملف) عشان (أ) driver.js نفسه يقدر يستخدمها محليًا
+// (سطر 79 تحت) و(ب) rides.js و external.js يفضلوا شغالين من غير أي تعديل في استيرادهم.
+export { _distMeters };
 export let _lastGpsWrite = 0, _lastGpsLat = null, _lastGpsLng = null;
 let _lastGpsFeedback = 0; // جديد: للـ throttle - مانعرضش Toast مع كل نبضة GPS سيئة (ممكن كل ثانية)
 function _throttledGpsFeedback(msg) {
@@ -65,6 +69,14 @@ export function startGPS() {
   stopGPS();
   window._gpsWatch = navigator.geolocation.watchPosition(pos => {
     const {latitude:lat, longitude:lng, accuracy} = pos.coords;
+    // جديد (P9 - Final Hardening، البند 4 - Invalid Coordinates/NaN): بعض أجهزة/متصفحات نادرة
+    // بترجع إحداثيات غير صالحة (NaN/Infinity) من GeolocationPosition نفسها رغم نجاح الطلب
+    // ظاهريًا (مفيش error.code اتطلق) - زي bug معروف على بعض متصفحات الديسكتوب القديمة. من
+    // غير الفحص ده، القيمة كانت هتعدي كل الفلاتر تحت (NaN>=500 بتدي false يعني مش هتتصفّى كـ
+    // "دقة ضعيفة")، وتتخزّن جوه window.driverLat/Lng وتتبعت لـ Firestore/Route Requests -
+    // Firestore Rules هتردّها (lat/lng range check)، لكن أفضل نوقفها هنا الأول بدل ما نضيّع
+    // Request فاشل، ونمنع كمان تخزينها في users/{uid} (مالوش نفس حماية orderDriverLocationUpdateOk).
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
     // تجاهل نبضة GPS شبه عديمة الفايدة (دقة أسوأ من 500 متر) - كتابتها هتوهم العميل/الأدمن
     // بموقع غلط تمامًا للمندوب بدل ما ماتتحدثش الخريطة أصلًا لحد ما توصل نبضة أدق. لكن مفيش
     // داعي نسيب المندوب من غير أي تفسير ليه الخريطة "متجمدة" - Feedback مُهدّأ (throttled).
@@ -86,6 +98,10 @@ export function startGPS() {
     // كتابة rides/{rideId}.driverLocation بتتم بس لو فيه مشوار جاري في إحدى الحالات الثلاث
     // (driver_assigned/driver_arrived/in_progress) - الفحص ده بيحصل جوه الدالة نفسها.
     updateDriverLocationForActiveRide(lat, lng);
+    // جديد (Delivery Tracking Hardening - P7): نفس بالظبط، بس لـ orders/{orderId}.driverLocation
+    // (Delivery مش Ride) - نفس النبضة، صفر Watcher/كتابة إضافية. الفحص (فيه طلب توصيل نشط
+    // فعلًا؟) بيحصل جوه الدالة نفسها (_activeDeliveryOrderId من الـ Snapshot الحي).
+    updateDriverLocationForActiveDeliveryOrder(lat, lng);
   }, err => {
     // جديد (Final Map QA - القسم 10): كانت فاضية تمامًا - لو المندوب سحب صلاحية الموقع وهو
     // Online، كان مش هياخد أي تنبيه ليه الطلبات وقفت توصله. أهم حالة هنا PERMISSION_DENIED.
@@ -102,6 +118,84 @@ export function stopGPS() {
     navigator.geolocation.clearWatch(window._gpsWatch);
   }
   window._gpsWatch = null;
+}
+
+// ===== P0 GPS Lifecycle (Maps & Tracking Hardening) =====
+// قبل كده startGPS() كانت بتتنادى مرة واحدة بس عند تسجيل الدخول (routeUser في auth.js)،
+// وstopGPS() بتتنادى بس عند تسجيل الخروج - يعني الـ watchPosition كانت شغالة طول ما التطبيق
+// مفتوح حتى لو المندوب حط نفسه "غير متاح" (Offline) ومعندوش أي طلب/مشوار جاري، من غير أي علاقة
+// بزرار toggleOnline() خالص. ده استهلاك GPS/Battery حقيقي بلا داعي، وهو بالظبط سلوك GPS Lifecycle
+// المطلوب تصحيحه (البنود 1-3). القرار: نتتبع محليًا هل عند المندوب مهمة توصيل جارية فعليًا (من
+// نفس الـ Listener الحي driverOrdersUnsub الشغال بالفعل - صفر Listener جديد)، ونضيفها لمهمة
+// المشوار الجارية (isDriverRideActive من rides.js) عشان نقرر هل نوقف GPS فعليًا أو لأ.
+let _hasActiveDeliveryOrder = false;
+// جديد (Delivery Tracking Hardening - P7): مش بس "هل عنده طلب نشط" (Boolean) - محتاجين الـ
+// orderId نفسه كمان عشان نعرف نكتب driverLocation فين. نفس مصدر الحقيقة بالظبط (الـ Snapshot
+// الحي)، مش activeOrderId من users/{uid} (ممكن يفضل قديم في حالات إلغاء معيّنة - راجع البند 16
+// تحت وتقرير QA). لو فيه أكتر من طلب "نشط" ظاهر في نفس اللحظة (مش متوقع - acceptOrderAsDriver
+// بيمنع مندوب مشغول من قبول طلب تاني عبر activeOrderId check)، بناخد آخر واحد لقيناه في
+// الـ Snapshot - أفضل من مفيش كتابة خالص.
+let _activeDeliveryOrderId = null;
+// الحالات اللي المندوب لسه فيها "مكلّف" بطلب توصيل جاري (قبل التسليم/الإلغاء) - نفس القائمة
+// المستخدمة فعليًا في actionHtml جوه loadDriverOrders() تحت. Strings حرفية (مش ORDER_STATUS.x)
+// عمدًا: orders.js بيعمل import لـ driver.js أصلًا (transitionOrder وغيرها)، فقراءة قيم
+// ORDER_STATUS (const عادي، مش function declaration) على مستوى الموديول هنا وقت التحميل ممكن
+// تحصل قبل ما orders.js يخلص تنفيذ الـ export بتاعته فعليًا (Circular Import) - سلوك مؤكد
+// بالاختبار: بيرمي "Cannot access 'ORDER_STATUS' before initialization". نفس بالظبط سبب
+// POST_PICKUP_STATUSES/PRE_PICKUP_ROUTABLE في maps.js اللي بتستخدم Strings حرفية بدل import
+// لنفس السبب (موثّق هناك بالتفصيل). القيم مطابقة لـ ORDER_STATUS.DRIVER_ASSIGNED/DRIVER_ARRIVED/
+// PICKED_UP/ON_THE_WAY في orders.js بالحرف.
+const ACTIVE_DRIVER_ORDER_STATUSES = ['driver_assigned', 'driver_arrived', 'picked_up', 'on_the_way'];
+// جديد (البند 16 - activeOrderId Bug): لو طلب كان معيّن للمندوب اتلغى (إلغاء عميل/تاجر/أدمن -
+// أي مسار)، acceptOrderAsDriver كانت الوحيدة اللي بتحط activeOrderId، لكن ولا مسار إلغاء واحد
+// كان بيفضّيه - فالمندوب يفضل "مشغول" (busy check في acceptOrderAsDriver) للأبد حتى لو الطلب
+// اتلغى فعليًا. الإصلاح هنا (مش في transitionOrder في orders.js) عمدًا: الإلغاء بيحصل من
+// جانب العميل/التاجر/الأدمن، ومحدش منهم عنده صلاحية يعدّل users/{driverId} (Rules الحالية
+// بتقصر التعديل على صاحب المستند نفسه أو الأدمن - لو حاولنا نضيف الكتابة دي جوه نفس الـ
+// Transaction بتاعة transitionOrder، هتترفض بالكامل (كل Transaction بترفض لو أي جزء منها
+// مخالف للـ Rules) وتكسر الإلغاء نفسه). فالمندوب نفسه (اللي عنده صلاحية تعديل مستنده) هو اللي
+// بيلاحظ الإلغاء من نفس الـ Snapshot الحي ده ويصحح activeOrderId بتاعه ذاتيًا - Transaction ذاتية
+// (قراءة+تحقق+تحديث) على مستنده هو بس، وبتتأكد إن activeOrderId لسه بيشاور فعليًا على الطلب
+// الملغي ده بالظبط قبل ما تفضّيه (لو بيشاور لطلب تاني، مبيتلمسش خالص - زي ما اتطلب صراحة).
+async function _healActiveOrderIdIfCancelled(orderId) {
+  if (!window.CU) return;
+  const uRef = doc(db, 'users', window.CU.uid);
+  try {
+    await runTransaction(db, async (t) => {
+      const uSnap = await t.get(uRef);
+      if (uSnap.data()?.activeOrderId === orderId) t.update(uRef, { activeOrderId: null });
+    });
+  } catch (e) { /* Best-effort - لو فشلت هتتصحح تاني مع أي نبضة Snapshot جاية لنفس الطلب */ }
+}
+// بتتنده من داخل loadDriverOrders() (نفس الـ Snapshot الحي) كل ما بيانات طلبات المندوب تتحدّث.
+function _updateHasActiveDeliveryOrder(snap) {
+  let has = false, activeId = null;
+  snap.forEach(d => {
+    const st = normalizeStatus(d.data().status);
+    if (ACTIVE_DRIVER_ORDER_STATUSES.includes(st)) { has = true; activeId = d.id; }
+    else if (st === ORDER_STATUS.CANCELLED) _healActiveOrderIdIfCancelled(d.id);
+  });
+  _hasActiveDeliveryOrder = has;
+  _activeDeliveryOrderId = activeId;
+}
+// مُصدَّرة لو أي كود تاني محتاج يعرف هل عند المندوب طلب توصيل جاري دلوقتي (قراءة فقط).
+export function hasActiveDriverOrder() { return _hasActiveDeliveryOrder; }
+// جديد (Delivery Tracking Hardening - P7): بتتنده من نبضة GPS نفسها (startGPS تحت) - بتكتب
+// orders/{orderId}.driverLocation بس لو فعلًا فيه طلب توصيل نشط ومسند للمندوب دلوقتي (نفس
+// الـ Snapshot الحي، مش activeOrderId لوحده - راجع البند 4 في تعليمات المهمة).
+function updateDriverLocationForActiveDeliveryOrder(lat, lng) {
+  if (_activeDeliveryOrderId) updateDriverLocationForOrder(_activeDeliveryOrderId, lat, lng);
+}
+// نقطة القرار المركزية: يتقفل GPS فعليًا بس لو المندوب Offline، ومفيش عنده طلب توصيل جاري،
+// ومفيش عنده مشوار جاري. بتتنده من toggleOnline() (لما يحط نفسه Offline) وكمان من rides.js
+// (stopDriverActiveRide) لما مشوار جاري يخلص - عشان لو خلص وهو أصلًا Offline بالفعل، نوقف GPS
+// في نفس اللحظة بدل ما يفضل شغال بلا داعي لحد أي حدث تاني.
+export function maybeStopGpsIfIdle() {
+  // جديد (P8 - External Purchase GPS Lifecycle): "المهمة النشطة" دلوقتي بتشمل External Purchase
+  // كمان (مش بس Delivery/Ride) - نفس مصدر الحقيقة الحي الموجود بالفعل (isDriverExternalActive
+  // في external.js، مبني على نفس Query الحي اللي initDriverActiveExternalListener بيفتحه أصلًا -
+  // صفر Listener/Watcher/Timer إضافي).
+  if (!window.onlineStatus && !_hasActiveDeliveryOrder && !isDriverRideActive() && !isDriverExternalActive()) stopGPS();
 }
 
 
@@ -205,6 +299,12 @@ export function loadDriverOrders() {
   if (driverOrdersUnsub) return;
   const q = query(collection(db,'orders'), where('driverId','==',window.CU.uid), orderBy('createdAt','desc'), limit(20));
   driverOrdersUnsub = onSnapshot(q, snap => {
+    // P0 GPS Lifecycle: نفس الـ Snapshot الحي ده هو مصدر الحقيقة لـ "هل عند المندوب طلب توصيل
+    // جاري دلوقتي" - بيتحدّث تلقائيًا مع أي تغيير حالة (تسليم/إلغاء/تعيين جديد)، فبنستخدمه هنا
+    // بدل الاعتماد على حقل activeOrderId في Firestore (ممكن يفضل قديم في حالات إلغاء معيّنة -
+    // موثّق في تقرير QA). لو الطلب النشط الوحيد خلص وهو أصلًا Offline، بيوقف GPS فورًا.
+    _updateHasActiveDeliveryOrder(snap);
+    maybeStopGpsIfIdle();
     const list = document.getElementById('drv-ords-list');
     const today = new Date().toDateString();
     let tOrd=0, tEarn=0, wOrd=0, wEarn=0;
@@ -286,6 +386,12 @@ export function toggleOnline(el) {
     document.getElementById('new-ord-banner').style.display='none';
     const rb = document.getElementById('ride-offer-banner'); if (rb) rb.style.display='none';
   }
+  // P0 GPS Lifecycle: قبل كده الزرار ده مكانش بيلمس GPS خالص (startGPS() كانت بتتنادى مرة واحدة
+  // بس عند تسجيل الدخول وتفضل شغالة لحد الخروج، بغض النظر عن الحالة هنا). دلوقتي: Online
+  // = ابدأ GPS، Offline = أوقفه بس لو مفيش طلب توصيل أو مشوار جاري (maybeStopGpsIfIdle
+  // بتتأكد من الاتنين قبل ما توقف - راجع تعريفها فوق).
+  if (window.onlineStatus) startGPS();
+  else maybeStopGpsIfIdle();
   // Phase 3B: isOnline لازم يتكتب في Firestore فعليًا عشان يبقى قابل للاستعلام وقت الـ Dispatch
   if (window.CU) updateDoc(doc(db,'users',window.CU.uid), { isOnline: window.onlineStatus }).catch(()=>{});
 }
@@ -422,7 +528,7 @@ export function dregNext(){
   dregGoto(window.dregStep+1);
 }
 export function dregBack(){
-  if(window.dregStep<=1){ showScreen('screen-entry'); return; }
+  if(window.dregStep<=1){ destroyDriverRegLocationMap(); showScreen('screen-entry'); return; }
   dregGoto(window.dregStep-1);
 }
 export function dregUpdateProgress(){
@@ -461,6 +567,14 @@ export async function dregGetLocation(){
   btn.innerHTML=icon('loader',16)+' جارٍ تحديد موقعك...';
   navigator.geolocation.getCurrentPosition(pos=>{
     const {latitude,longitude}=pos.coords;
+    // جديد (P11 Phase 7/16 - Coordinate Validation): مفيش فحص قبل كده هنا - إحداثية NaN/Infinity
+    // كانت هتتخزن في window.driverLoc (تتحفظ في مسودة التسجيل عبر dregSaveDraft) ولازم تتبعت
+    // مباشرة لـ initDriverRegLocationMap() (new maplibregl.Map مع center فاسد).
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      btn.innerHTML=icon('map-pin',16)+' تحديد موقعي الحالي';
+      showToast('تعذر تحديد موقعك بدقة، حاول مرة أخرى','err');
+      return;
+    }
     window.driverLoc={lat:latitude,lng:longitude};
     btn.innerHTML=icon('check-circle',16)+' تم تحديد موقعك';
     btn.classList.add('got');

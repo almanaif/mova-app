@@ -15,7 +15,9 @@ import { openLocationPicker } from './maps.js';
 export function openCustomerLocationPicker() {
   openLocationPicker({
     title: 'تحديد موقع التسليم',
-    initialLoc: window.userLat ? [window.userLat, window.userLng] : null,
+    // جديد (P12.1 - GPS Truthy Check): كان "window.userLat ? ... : null" - فحص Truthy بيرفض
+    // بالغلط إحداثية صالحة قيمتها 0. Number.isFinite() هي الفحص الصحيح لصلاحية GPS.
+    initialLoc: (Number.isFinite(window.userLat) && Number.isFinite(window.userLng)) ? [window.userLat, window.userLng] : null,
     onConfirm: ({ lat, lng, address, city, zone }) => {
       window.userLat = lat; window.userLng = lng;
       window.userLocAddress = address || null; // بيتقرأ في goCheckout() بدل تكرار reverseGeocode لنفس النقطة

@@ -4,10 +4,17 @@
 // نقطة واحدة للـ Style (OPENFREEMAP_STYLE) - أي تغيير مستقبلي للـ Style بيتم من هنا بس.
 // ممنوع Mapbox، وممنوع Leaflet في أي مكان بعد دلوقتي (زي ما اتحدد صراحة في Phase 4B).
 
-import { DEFAULT_LOC, STORE_LOC, db, doc } from './firebase.js';
-import { onListenersCleared, onSnapshot, showToast } from './utils.js';
+import { DEFAULT_LOC, STORE_LOC } from './firebase.js';
+import { onListenersCleared, showToast } from './utils.js';
 import { decodePolyline, getRoute, reverseGeocode, searchPlaces, searchPOICategory, POI_CATEGORIES } from './routing.js';
 import { renderIcons } from './icons.js';
+// P1 (توحيد المسافات - Maps & Tracking Hardening): _distMeters هي نفس دالة driver.js/rides.js
+// الموحّدة (Haversine دقيقة). بنستوردها من geo-utils.js (موديول صفر Imports) مش من driver.js
+// مباشرة - جرّبنا الاستيراد المباشر من driver.js الأول، لكن ثبت عمليًا (باختبار تحميل شجرة
+// الموديولات كاملة) إنه بيكسر تحميل التطبيق كله بسبب Circular Import ordering مع admin.js/
+// orders.js (راجع تعليق geo-utils.js للتفاصيل الكاملة). صفر تغيير في أي استخدام موجود لأي
+// دالة هنا (راجع alias تحت).
+import { distMeters as _distMeters } from './geo-utils.js';
 
 // ===== OpenFreeMap Style (الـ Style الرسمي - liberty) =====
 export const OPENFREEMAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
@@ -75,6 +82,24 @@ if (registerArabicRtlPlugin()) {
 // مرتين على نفس الـ instance (لو اتنادت غلط أكتر من مرة على نفس الخريطة - Duplicate controls).
 // المواقع (top-right / bottom-right) اتخيرت عشان متتعارضش مع زرار "توسيط"/"موقعي الحالي"
 // الموجود (.map-recenter-btn) اللي بيقعد في الزاوية السفلية المقابلة (bottom + inset-inline-end).
+// جديد (P12.1 - Map Attribution): AttributionControl واحد موحّد لكل الخرائط - OpenFreeMap/OSM
+// بيتطلبوا Attribution ظاهر في أي استخدام إنتاجي (مش بس Admin). كل الخرائط بتتبنى بـ
+// "attributionControl: false" في الـ constructor (تعطيل الزرار التلقائي بتاع MapLibre بس - مش
+// حذف الـ Attribution نفسه)، وبعدين بنضيفه إحنا يدويًا هنا في مكان ثابت (bottom-left، compact)
+// - عشان منتعارضش مع باقي الـ Controls الموجودة أصلًا في الركن التاني (ScaleControl bottom-right
+// + زرار "توسيط" المخصص .map-recenter-btn المثبّت هو كمان bottom-right). compact:true بيخلي
+// الـ Attribution يتقفل لأيقونة "ⓘ" صغيرة على الشاشات الضيقة (Mobile) وتتوسع بالضغط عليها -
+// مناسب لمساحة الخريطة المحدودة من غير ما ياخد مكان كبير أو يتعارض مع RTL (نفس الزرار بيشتغل
+// صح في الاتجاهين، مفيش نص متجه اتجاه معيّن بيتكسر).
+export function addAttributionControl(map) {
+  if (!map || map._attrControlAdded) return;
+  map._attrControlAdded = true;
+  try {
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-left');
+  } catch (e) {
+    console.error('تعذر إضافة Attribution Control:', e);
+  }
+}
 function addStandardControls(map) {
   if (!map || map._stdControlsAdded) return;
   map._stdControlsAdded = true;
@@ -84,6 +109,7 @@ function addStandardControls(map) {
   } catch (e) {
     console.error('تعذر إضافة map controls:', e);
   }
+  addAttributionControl(map);
 }
 
 // دالة مشتركة لمعالجة أخطاء تهيئة الخريطة (Loading / Init errors) - بتعرض رسالة واضحة للمستخدم
@@ -189,12 +215,11 @@ function fitToPoints(map, pts) {
 
 // مسافة تقريبية (Haversine) لعرض "350 م" جنب نتيجة بحث POI بس - مش Routing حقيقي ومش بديل
 // لـ getRoute()/OSRM؛ استخدام عرض فقط (البند 4 - Distance from current/selected point).
-function haversineMeters(lat1, lng1, lat2, lng2) {
-  const R = 6371000, toRad = (d) => d * Math.PI / 180;
-  const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
+// P1 (توحيد المسافات): كانت نسخة مكرّرة بالحرف من _distMeters (driver.js) - دلوقتي Wrapper بس
+// (مش top-level const binding مباشر - نفس نمط الحذر المتّبع فعليًا في rides.js مع الـ imports
+// الدائرية من maps.js، الاستدعاء الفعلي بيحصل جوه استخدام الدالة بس مش وقت تحميل الموديول)،
+// صفر تغيير في أي استدعاء موجود للاسم (haversineMeters(lat1,lng1,lat2,lng2) زي الأول تمامًا).
+function haversineMeters(lat1, lng1, lat2, lng2) { return _distMeters(lat1, lng1, lat2, lng2); }
 function formatDistanceLabel(m) {
   if (!Number.isFinite(m)) return '';
   return m < 1000 ? `${Math.round(m)} م` : `${(m / 1000).toFixed(1)} كم`;
@@ -387,7 +412,9 @@ export function openLocationPicker(opts = {}) {
   document.getElementById('loc-picker-title').textContent = opts.title || 'تحديد الموقع';
   locPickerOnConfirm = typeof opts.onConfirm === 'function' ? opts.onConfirm : null;
   modal.classList.add('open');
-  const start = opts.initialLoc || (window.userLat ? [window.userLat, window.userLng] : STORE_LOC);
+  // جديد (P12.1 - GPS Truthy Check): كان "window.userLat ? ... : STORE_LOC" - نفس فحص الـ
+  // Truthy الخاطئ (Number.isFinite هي الفحص الصحيح لصلاحية GPS، راجع الشرح في orders.js).
+  const start = opts.initialLoc || ((Number.isFinite(window.userLat) && Number.isFinite(window.userLng)) ? [window.userLat, window.userLng] : STORE_LOC);
   locPickerCurrentLoc = start;
   locPickerLastGeo = null;
   locPickerBuildCategoryChips();
@@ -422,9 +449,20 @@ export function locPickerUseCurrent() {
   showToast('📍 جاري تحديد موقعك...', '');
   navigator.geolocation.getCurrentPosition(pos => {
     const { latitude: lat, longitude: lng } = pos.coords;
+    // جديد (P11 Phase 6/16 - Coordinate Validation): مفيش فحص قبل كده هنا قبل flyTo - إحداثية
+    // NaN/Infinity (نادرة لكن ممكنة من بعض الأجهزة/المتصفحات) كانت ممكن توصل مباشرة لـ
+    // flyTo() ولـ reverse geocoding بعدها (عبر moveend) بمركز فاسد.
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      showToast('تعذر تحديد موقعك، حرّك الخريطة يدويًا لاختيار المكان', 'err');
+      return;
+    }
     if (locPickerMap) locPickerMap.flyTo({ center: [lng, lat], zoom: 16 });
   }, err => {
-    showToast('تعذر تحديد موقعك، حرّك الخريطة يدويًا لاختيار المكان', 'err');
+    // جديد (P11 Phase 6/3/4): تمييز "الإذن مرفوض" عن "GPS غير متاح" بدل رسالة واحدة عامة للحالتين.
+    const msg = err && err.code === 1
+      ? 'تم رفض إذن الموقع - حرّك الخريطة يدويًا لاختيار المكان'
+      : 'تعذر تحديد موقعك، حرّك الخريطة يدويًا لاختيار المكان';
+    showToast(msg, 'err');
   }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 });
 }
 
@@ -452,11 +490,56 @@ export function locPickerConfirm() {
 // =====================================================================================
 // ===== TRACKING MAP (Delivery) =====
 // =====================================================================================
-export let trackDriverUnsub = null;
+// جديد (Delivery Tracking Hardening): كانت trackDriverUnsub بتخزن unsubscribe لـ Listener
+// مباشر على users/{driverId} - اتشالت بالكامل (راجع updateTrackDriverLocation تحت). العميل
+// أصلاً مالوش صلاحية قراءة users/{driverId} في firestore.rules (مقصورة على صاحب المستند نفسه
+// أو الأدمن)، يعني الـ Listener القديم ده كان بيتقفل بصمت بـ permission-denied من غير ما
+// يوصل أي تحديث موقع للعميل خالص - التتبع الحي كان معطّل فعليًا. لا داعي لمتغير Unsubscribe
+// هنا أصلًا دلوقتي لأننا مبنفتحش Listener تاني منفصل - موقع المندوب بيوصل من نفس onSnapshot
+// الموجود بالفعل على orders/{orderId} في orders.js (openTrack) عبر driverLocation.
+let trackCustLoc = null; // آخر موقع عميل استخدمناه لحساب مسار (لازمة برة on('load') عشان updateTrackDriverLocation يقدر يوصلها من نداءات لاحقة)
 let trackFitPoints = [];        // نقط الخريطة الحالية (متجر/عميل/مندوب) - يستخدمها زرار "توسيط"
 let _trackRouteReqId = 0;       // Race Guard: كل طلب Routing بياخد رقم؛ بنطبق بس آخر رد وصل لآخر طلب اتبعت
 let _trackRouteLastPos = null;  // آخر نقطة اتحسب المسار منها فعليًا (لتحديد "تحرك حقيقي" بعد كده)
 let _trackRoutePhase = null;    // 'to-customer' (متجر/مندوب -> عميل) - نستخدمها لمعرفة هل المرحلة اتغيرت
+// ===== P11 Phase 3/4/11 - Follow Mode + Smooth Marker Movement (Order Tracking) =====
+// _trackFollowMode: هل الكاميرا "تتابع" المندوب تلقائيًا دلوقتي؟ true افتراضيًا (متابعة تلقائية
+// معقولة في البداية زي ما اتطلب)، وبتتقفل أول ما المستخدم يسحب/يزوم الخريطة يدويًا (dragstart/
+// zoomstart - أحداث تفاعل حقيقي بس، مش بتتفعّل من camera moves برمجية زي easeTo)، وترجع تاني
+// بس لما يضغط زرار التوسيط (recenterTrackMap). فرق جوهري عن قبل: مفيش fitBounds مع كل GPS
+// Update (كان هيخلي الخريطة "تهتز") - Follow Mode هنا معناه easeTo لمركز واحد بس (موقع
+// المندوب)، بدون تغيير الزوم، فمفيش تعارض مع تفاعل المستخدم إلا لو هو نفسه بيسحب/يزوم.
+let _trackFollowMode = true;
+let _trackDriverAnimPos = null; // آخر نقطة اتعرض فعليًا على الماركر (نقطة بداية الـ Animation الجاية)
+let _trackDriverAnimHolder = { id: null }; // مرجع ثابت لـ requestAnimationFrame الحالي - عشان نقدر نلغيه من أي مكان (Destroy/تحديث جديد)
+
+// جديد (P11 Phase 4): حركة سلسة للماركر بين نقطتين GPS بدل قفزة مباشرة. مشترك بين خريطة تتبع
+// الطلبات وخريطة حالة المشوار (كل واحدة عندها holder/lastPos منفصلين). قواعد صريحة:
+// - لو المسافة صغيرة جدًا (<=1م) أو غير منطقية (>300م - أرجح قفزة GPS/إشارة ضعيفة مش حركة
+//   فعلية) أو غير محدودة (NaN/Infinity)، نحط الماركر في مكانه الجديد فورًا من غير Animation.
+// - أي Animation سابق لسه شغال (لو نبضة GPS جت قبل ما القديمة تخلص) بيتلغى فورًا قبل ما نبدأ
+//   واحد جديد - صفر تراكم Animation Loops.
+// - مفيش أي تأثير على Firestore أو أي state تاني غير موقع الـ DOM Marker نفسه بصريًا.
+function animateMarkerMove(marker, fromLatLng, toLatLng, holder) {
+  if (holder.id) { cancelAnimationFrame(holder.id); holder.id = null; }
+  const meters = _distMeters(fromLatLng[0], fromLatLng[1], toLatLng[0], toLatLng[1]);
+  if (!Number.isFinite(meters) || meters <= 1 || meters > 300) {
+    marker.setLngLat([toLatLng[1], toLatLng[0]]);
+    return;
+  }
+  const duration = 900;
+  const start = performance.now();
+  function step(now) {
+    const t = Math.min(1, (now - start) / duration);
+    marker.setLngLat([
+      fromLatLng[1] + (toLatLng[1] - fromLatLng[1]) * t,
+      fromLatLng[0] + (toLatLng[0] - fromLatLng[0]) * t,
+    ]);
+    if (t < 1) holder.id = requestAnimationFrame(step);
+    else holder.id = null;
+  }
+  holder.id = requestAnimationFrame(step);
+}
 const ROUTE_RECALC_METERS = 150; // أقل مسافة تحرك بيها المندوب عشان نطلب مسار جديد (بعد الاستلام)
 const DRIVER_STALE_MS = 90000;   // لو آخر تحديث موقع للمندوب أقدم من 90 ثانية، نعتبره "غير متاح حاليًا"
 
@@ -480,9 +563,10 @@ function updateTrackEtaDisplay(state, routeInfo) {
     if (etaEl) etaEl.textContent = 'جاري البحث عن مندوب';
     if (distEl) distEl.textContent = '--';
   } else if (state === 'driver-stale') {
-    // جديد (البند 16 - DRIVER LOCATION UNAVAILABLE): بدل ما نسيب آخر وقت محسوب معروض وهو
-    // بقى غير دقيق (المندوب ممكن يكون اتحرك كتير من ساعتها)، نوضح صراحة إن الموقع مش متاح.
-    if (etaEl) etaEl.textContent = '📡 موقع المندوب غير متاح حاليًا';
+    // جديد (P11 Phase 9): "آخر تحديث منذ Xث" بدل رسالة عامة - وضوح أكبر للعميل إن الموقع مش
+    // Live دلوقتي من غير ما يبان إنه اختفى تمامًا. لو الوقت مش معروف (نادر)، رجوع للنص العام.
+    const secs = routeInfo?.staleSeconds;
+    if (etaEl) etaEl.textContent = Number.isFinite(secs) ? `📡 آخر تحديث منذ ${secs} ثانية` : '📡 موقع المندوب غير متاح حاليًا';
   } else if (state === 'delivered') {
     // جديد (Final Map QA): الحالتين delivered/cancelled معندهمش أي branch قبل كده - يعني
     // نص الوقت/المسافة كان بيفضل عالق على آخر قيمة قبل التسليم (أو "جاري تحميل الخريطة..."
@@ -499,6 +583,16 @@ function updateTrackEtaDisplay(state, routeInfo) {
     if (etaEl) etaEl.textContent = 'تعذر حساب وقت الوصول حاليًا';
     if (distEl) distEl.textContent = '--';
   }
+}
+
+// P0 (Live Location State): تعتيم بصري بسيط لماركر المندوب لما موقعه يبقى STALE (بدل نص
+// ETA بس) - صفر Marker جديد، صفر تغيير في مكانه، بس opacity أقل عشان العميل ياخد إشارة بصرية
+// واضحة إن الموقع ده مش لايف دلوقتي. maplibregl.Marker.getElement() بترجع نفس الـ <div>
+// المستخدم في createMapMarker() فوق.
+function setDriverMarkerFreshness(isStale) {
+  if (!window.driverMarker || typeof window.driverMarker.getElement !== 'function') return;
+  const el = window.driverMarker.getElement();
+  if (el) el.style.opacity = isStale ? '0.45' : '1';
 }
 
 function getEffectiveStoreLoc(ordData) {
@@ -538,10 +632,27 @@ export function trackPhaseKey(status) {
   return 'other';
 }
 
-export function initTrackMap(ordData, status) {
+// جديد (P9 - Final Hardening): استُخرجت من أول initTrackMap() تحت (كانت نفس الأسطر دي بالحرف
+// هناك) لتُستخدم كمان من closeTrack() في orders.js (زرار "رجوع للرئيسية" في شاشة التتبع - كان
+// بينادي showScreen() مباشرة من غير أي Cleanup: trackUnsub (Firestore Listener) و trackMap
+// (خريطة MapLibre كاملة بكل مصادرها) كانوا بيفضلوا شغالين في الخلفية للأبد لحد ما العميل يفتح
+// تتبع طلب تاني أو يعمل Logout - تسريب Listener/Memory/Battery حقيقي، بالظبط الحالة اللي
+// البند "Open tracking → Close → Open → Close" بيطلب التأكد منها).
+// كمان بتزود _trackRouteReqId هنا (مش بس تصفّرها لـ null زي المتغيرات التانية) - ده يبطّل فورًا
+// أي Route Request قديم لسه Pending من الطلب اللي إحنا خارجين منه، حتى لو الطلب/الشاشة الجديدة
+// (أو مفيش شاشة خالص) مبتطلبش Route جديد بنفسها فورًا (Race Condition حقيقي كان ممكن يخلي رد
+// قديم لطلب A يترسم غلط على خريطة طلب B - راجع التقرير).
+export function destroyTrackMap() {
+  _trackRouteReqId++;
+  if (_trackDriverAnimHolder.id) { cancelAnimationFrame(_trackDriverAnimHolder.id); _trackDriverAnimHolder.id = null; }
+  _trackDriverAnimPos = null; _trackFollowMode = true;
   if (window.trackMap) { window.trackMap.remove(); window.trackMap = null; }
   window.driverMarker = null; window.customerMarker = null;
-  trackFitPoints = []; _trackRouteLastPos = null; _trackRoutePhase = null;
+  trackFitPoints = []; _trackRouteLastPos = null; _trackRoutePhase = null; trackCustLoc = null;
+}
+
+export function initTrackMap(ordData, status) {
+  destroyTrackMap();
   const etaEl = document.getElementById('track-eta');
   if (etaEl) etaEl.textContent = 'جاري تحميل الخريطة...';
   if (typeof maplibregl === 'undefined') return;
@@ -551,6 +662,12 @@ export function initTrackMap(ordData, status) {
     center: toLngLat(storeLoc), zoom: 14, attributionControl: false,
   });
   addStandardControls(window.trackMap);
+  // جديد (P11 Phase 3C/11): إيقاف Follow Mode بس لما المستخدم يتفاعل هو نفسه مع الخريطة
+  // (سحب/زوم حقيقي) - dragstart/zoomstart بتتفعّل من تفاعل يدوي فعلي بس في MapLibre، مش من
+  // حركات كاميرا برمجية زي easeTo() (اللي بنستخدمها إحنا في Follow Mode وزرار التوسيط، وده
+  // بيطلق movestart/moveend بس مش dragstart/zoomstart) - فمفيش تعارض بين الاتنين.
+  window.trackMap.on('dragstart', () => { _trackFollowMode = false; });
+  window.trackMap.on('zoomstart', () => { _trackFollowMode = false; });
   markMapLoading('tracking-map');
   attachMapErrorHandling(window.trackMap, () => { if (etaEl) etaEl.textContent = 'تعذر تحميل الخريطة'; showMapErrorMsg('tracking-map', 'تعذر تحميل الخريطة'); });
   window.trackMap.on('load', () => {
@@ -560,11 +677,13 @@ export function initTrackMap(ordData, status) {
     trackFitPoints.push(storeLoc);
     const custLoc = (typeof ordData?.customerLat === 'number' && typeof ordData?.customerLng === 'number')
       ? [ordData.customerLat, ordData.customerLng]
-      : (window.userLat ? [window.userLat, window.userLng] : null);
+      // جديد (P12.1 - GPS Truthy Check): كان "window.userLat ? ... : null" - نفس الفحص الخاطئ.
+      : ((Number.isFinite(window.userLat) && Number.isFinite(window.userLng)) ? [window.userLat, window.userLng] : null);
     if (custLoc) {
       window.customerMarker = createMapMarker(window.trackMap, custLoc, 'customer');
       trackFitPoints.push(custLoc);
     }
+    trackCustLoc = custLoc;
     // قبل الاستلام: مسار متجر -> عميل (لو الحالة فعلًا في مرحلة يبقى فيها المسار منطقي).
     // بعد الاستلام: هيتحسب مسار مندوب -> عميل تحت في Listener الموقع نفسه (محتاج موقع مندوب
     // حي أولًا، مش متوفر لحظة تحميل الخريطة).
@@ -580,47 +699,88 @@ export function initTrackMap(ordData, status) {
     }
     fitToPoints(window.trackMap, trackFitPoints);
 
-    if (trackDriverUnsub) { try { trackDriverUnsub(); } catch (e) {} trackDriverUnsub = null; }
-    // جديد (Final Map QA): الطلبات المنتهية (delivered/cancelled) كانت لسه بتفتح Listener حي
-    // على موقع المندوب لو كان معيّن، رغم إن مفيش داعي نتابعه بعد انتهاء الطلب فعليًا - استهلاك
-    // Firestore Listener بلا فايدة طول ما شاشة التتبع فاضلة مفتوحة. القسم 13 (Sprint سابق)
-    // طلب صراحة "cancelled: stop unnecessary live tracking" - نفس المنطق بينطبق على delivered.
-    const isTerminal = status === 'delivered' || status === 'cancelled';
-    if (ordData?.driverId && !isTerminal) {
-      trackDriverUnsub = onSnapshot(doc(db, 'users', ordData.driverId), snap => {
-        const d = snap.data();
-        const lastSeenMs = d?.lastSeen?.toMillis ? d.lastSeen.toMillis() : null;
-        const isStale = lastSeenMs != null && (Date.now() - lastSeenMs) > DRIVER_STALE_MS;
-        if (!d?.lat || !d?.lng) return; // مفيش موقع للمندوب لسه (لسه ماحرّكش GPS) - مفيش داعي نكسر أي حاجة
-        if (isStale && POST_PICKUP_STATUSES.includes(status)) { updateTrackEtaDisplay('driver-stale'); return; }
-        const driverPos = [d.lat, d.lng];
-        if (!window.driverMarker) {
-          window.driverMarker = createMapMarker(window.trackMap, driverPos, 'driver');
-        } else {
-          window.driverMarker.setLngLat([d.lng, d.lat]); // تحديث نقطة موجودة - صفر Marker جديد (البند 8/9 - مفيش سرقة كاميرا)
-        }
-        // بعد الاستلام: المسار لازم يبقى مندوب -> عميل، ويتحسب تاني بس لو المندوب اتحرك
-        // مسافة فعلية (ROUTE_RECALC_METERS) - مش مع كل نبضة GPS (البند 10).
-        if (custLoc && POST_PICKUP_STATUSES.includes(status)) {
-          const phaseChanged = _trackRoutePhase !== 'driver-to-customer';
-          const movedFar = !_trackRouteLastPos ||
-            Math.hypot(driverPos[0] - _trackRouteLastPos[0], driverPos[1] - _trackRouteLastPos[1]) * 111000 >= ROUTE_RECALC_METERS;
-          if (phaseChanged || movedFar) {
-            _trackRoutePhase = 'driver-to-customer';
-            _trackRouteLastPos = driverPos;
-            if (phaseChanged) removeRoute(window.trackMap, 'track-route'); // مسار المرحلة القديمة (متجر->عميل) يتشال قبل ما نرسم الجديد
-            computeAndDrawTrackRoute(driverPos, custLoc);
-          }
-        }
-      });
-    }
+    // جديد (Delivery Tracking Hardening - P7): كان هنا Listener مباشر على users/{driverId}
+    // (راجع الشرح فوق trackCustLoc) - العميل مالوش صلاحية قراءته أصلًا في firestore.rules،
+    // فده كان بيفشل بصمت وميجيبش أي تحديث موقع خالص. دلوقتي أول رسم للماركر (لو الموقع
+    // موجود بالفعل في ordData وقت بناء الخريطة) بيحصل هنا مباشرة، وأي تحديث بعد كده بييجي من
+    // نفس onSnapshot الموجود بالفعل على orders/{orderId} في orders.js (مفيش Listener إضافي).
+    updateTrackDriverLocation(ordData, status);
   });
+}
+
+// جديد (Delivery Tracking Hardening - P7): بديل الـ Listener المباشر على users/{driverId}
+// (اتشال بالكامل - راجع الشرح فوق). بتتنده من مكانين بس: (أ) هنا فوق مباشرة بعد بناء الخريطة
+// لأول مرة لنفس الطلب، و(ب) من orders.js (openTrack) مع كل نبضة onSnapshot جديدة على نفس
+// مستند الطلب - وهي نفس النبضة اللي بتوصل أصلًا مع كل تحديث GPS من المندوب (driver.js يكتب
+// orders/{orderId}.driverLocation، مش users/{driverId} - راجع orders.js). صفر Listener جديد.
+export function updateTrackDriverLocation(ordData, status) {
+  if (!window.trackMap) return; // الخريطة لسه ماتبنتش (أو الشاشة اتقفلت) - هيتحدّث تاني مع أول نداء بعد initTrackMap
+  // جديد (البند 9 - Terminal States): لو الطلب وصل لحالة نهائية، منمنعش رسم/تحديث ماركر
+  // المندوب خالص - حتى لو نبضة متأخرة (late snapshot) وصلت بموقع "أحدث"، أو المندوب اتنقل
+  // لطلب تاني وموقعه اتحدّث على مستند الطلب القديم قبل ما أي Listener يتقفل فعليًا.
+  const isTerminal = status === 'delivered' || status === 'cancelled';
+  if (isTerminal || !ordData?.driverId || !ordData?.driverLocation) return; // NO_LOCATION: لسه مفيش موقع فعلي - صفر Marker وهمي
+  const d = ordData.driverLocation;
+  if (typeof d.lat !== 'number' || typeof d.lng !== 'number') return;
+  // ===== P0 (Live Location State): NO_LOCATION / LIVE / STALE موحّدة. updatedAt (على مستند
+  // الطلب نفسه) بتتحدّث مع كل كتابة GPS فعلية (driver.js -> startGPS -> orders.js)، فهي مقياس
+  // "حداثة" موثوق بغض النظر عن مرحلة الطلب - بديل lastSeen على users/{driverId} القديم.
+  const updatedAtMs = d.updatedAt?.toMillis ? d.updatedAt.toMillis() : null;
+  const isStale = updatedAtMs == null || (Date.now() - updatedAtMs) > DRIVER_STALE_MS; // STALE لو مفيش وقت معروف أصلًا برضه - محافظ عمدًا
+  const driverPos = [d.lat, d.lng];
+  if (!window.driverMarker) {
+    window.driverMarker = createMapMarker(window.trackMap, driverPos, 'driver');
+    _trackDriverAnimPos = driverPos;
+    // جديد (P11 Phase 3A): أول ظهور فعلي لموقع المندوب - الكاميرا توسّع لتشمله مع المتجر/العميل
+    // مرة واحدة بس (مش fitBounds مع كل تحديث بعد كده - ده كان هيخلي الخريطة تهتز، ممنوع صراحة
+    // في البند 11). لو المستخدم بعد كده سحب/زوم يدوي، Follow Mode بيتقفل تلقائيًا (dragstart/
+    // zoomstart فوق) ومنلمسش الكاميرا تاني إلا لو ضغط زرار التوسيط.
+    fitToPoints(window.trackMap, [...trackFitPoints, driverPos]);
+  } else {
+    const from = _trackDriverAnimPos || driverPos;
+    animateMarkerMove(window.driverMarker, from, driverPos, _trackDriverAnimHolder);
+    _trackDriverAnimPos = driverPos;
+    // جديد (P11 Phase 3C/11): Follow Mode = توسيط الكاميرا على المندوب فقط (من غير تغيير الزوم)
+    // مع كل تحديث موقع - مش fitBounds كامل (ده اللي كان هيخلي الخريطة "تهتز" مع كل GPS Update).
+    if (_trackFollowMode) window.trackMap.easeTo({ center: [driverPos[1], driverPos[0]], duration: 900 });
+  }
+  // تعتيم الماركر لو الموقع STALE - بصريًا على الخريطة نفسها، مش بس نص الـ ETA، وفي كل المراحل
+  // (مش POST_PICKUP بس) - "لا يظهر Driver Marker قديم للمستخدم وكأنه Live" (البند 12).
+  setDriverMarkerFreshness(isStale);
+  if (isStale && POST_PICKUP_STATUSES.includes(status)) {
+    // جديد (P11 Phase 9): بدل رسالة عامة "غير متاح حاليًا"، نوضح من إمتى آخر تحديث فعلي - نص
+    // أوضح للعميل من مجرد تعتيم الماركر (اللي بيفضل شغال برضه فوق).
+    const secs = updatedAtMs == null ? null : Math.max(0, Math.floor((Date.now() - updatedAtMs) / 1000));
+    updateTrackEtaDisplay('driver-stale', { staleSeconds: secs });
+    return;
+  }
+  // بعد الاستلام: المسار لازم يبقى مندوب -> عميل، ويتحسب تاني بس لو المندوب اتحرك مسافة
+  // فعلية (ROUTE_RECALC_METERS) - مش مع كل نبضة GPS (البند 10/14).
+  if (trackCustLoc && POST_PICKUP_STATUSES.includes(status)) {
+    const phaseChanged = _trackRoutePhase !== 'driver-to-customer';
+    const movedFar = !_trackRouteLastPos ||
+      _distMeters(_trackRouteLastPos[0], _trackRouteLastPos[1], driverPos[0], driverPos[1]) >= ROUTE_RECALC_METERS;
+    if (phaseChanged || movedFar) {
+      _trackRoutePhase = 'driver-to-customer';
+      _trackRouteLastPos = driverPos;
+      if (phaseChanged) removeRoute(window.trackMap, 'track-route'); // مسار المرحلة القديمة (متجر->عميل) يتشال قبل ما نرسم الجديد
+      computeAndDrawTrackRoute(driverPos, trackCustLoc);
+    }
+  }
 }
 // جديد: زرار "توسيط" على خريطة تتبع الطلب - بيرجّع كل النقط المعروضة (متجر/عميل/مسار) في
 // مجال النظر تاني، مفيد لو العميل زوّم/سحب الخريطة يدوي وعايز يرجعلها.
+// جديد (P11 Phase 3B/11): دلوقتي كمان بيعيد تفعيل Follow Mode، ولو موقع المندوب معروف بالفعل
+// بيوسّط الكاميرا عليه هو تحديدًا (مش fitBounds لكل النقط - المندوب هو اللي بيتحرك، فمتابعته
+// هي المنطقية هنا)؛ لو لسه مفيش موقع مندوب، يرجع لسلوك "توسيط كل النقط" القديم.
 export function recenterTrackMap() {
-  if (!window.trackMap || !trackFitPoints.length) return;
-  fitToPoints(window.trackMap, trackFitPoints);
+  if (!window.trackMap) return;
+  _trackFollowMode = true;
+  if (_trackDriverAnimPos) {
+    window.trackMap.easeTo({ center: [_trackDriverAnimPos[1], _trackDriverAnimPos[0]], duration: 600 });
+  } else if (trackFitPoints.length) {
+    fitToPoints(window.trackMap, trackFitPoints);
+  }
 }
 
 // =====================================================================================
@@ -814,7 +974,7 @@ export function initAdminMap(drivers = [], rides = []) {
   setTimeout(() => {
     window.admMap = new maplibregl.Map({
       container: 'admin-map', style: OPENFREEMAP_STYLE,
-      center: toLngLat(DEFAULT_LOC), zoom: 13, attributionControl: true,
+      center: toLngLat(DEFAULT_LOC), zoom: 13, attributionControl: false,
     });
     addStandardControls(window.admMap);
     markMapLoading('admin-map');
@@ -835,6 +995,46 @@ export function initAdminMap(drivers = [], rides = []) {
 // (rides/{rideId}.driverLocation - Phase 4B، بديل قراءة users/{driverId} القديمة للمشاوير).
 let rsMap = null;
 let rsDriverMarker = null;
+// ===== P11 Phase 5 - نفس معاملة Follow Mode/Smooth Movement بتاعة خريطة تتبع الطلبات فوق،
+// لكن instance منفصلة تمامًا (خريطة مختلفة، حالة مختلفة) =====
+let _rsFollowMode = true;
+let _rsDriverAnimPos = null;
+let _rsDriverAnimHolder = { id: null };
+let _rsFitPoints = []; // pickup/dropoff (وnقطة المندوب أول ما توصل) - يستخدمها زرار التوسيط
+// ===== P12 (استكمال البند المؤجل من تقرير P11 - "Ride route does not dynamically recompute") =====
+// كانت rsMap بترسم خط المسار الثابت المحسوب وقت إنشاء المشوار (pickup->dropoff) بس، ومتغيرش
+// بعد كده أبدًا مهما تحرك المندوب - خلاف خريطة تتبع الطلبات (computeAndDrawTrackRoute فوق)
+// اللي بتعيد حساب المسار ديناميكيًا. دلوقتي: قبل الاستلام (driver_assigned/driver_arrived) -
+// المسار = مندوب->نقطة الالتقاط؛ بعد الاستلام (in_progress) - المسار = مندوب->الوجهة. نفس
+// بالظبط فلسفة _trackRouteReqId/_trackRoutePhase/ROUTE_RECALC_METERS فوق، Instance منفصلة.
+let _rsRouteReqId = 0;
+let _rsRoutePhase = null;       // 'to-pickup' | 'to-destination'
+let _rsRouteLastPos = null;     // آخر نقطة اتحسب المسار الديناميكي منها فعليًا
+// Strings حرفية عمدًا (مش RIDE_STATUS.x من rides.js) - maps.js مالوش import من rides.js أصلًا
+// (العكس هو الموجود: rides.js بيستورد من maps.js)، فاستيراد RIDE_STATUS هنا كان هيعمل Circular
+// Import جديد. نفس أسلوب POST_PICKUP_STATUSES تحت بالحرف لنفس السبب بالظبط.
+const RS_PRE_PICKUP_STATUSES = ['driver_assigned', 'driver_arrived'];
+const RS_POST_PICKUP_STATUSES = ['in_progress'];
+// جديد (P12 - Terminal State Race): لو طلب Routing ديناميكي كان لسه Pending واتلغى الرد بعد
+// ما المشوار بقى Terminal (تم/اتلغى) - الخريطة نفسها لسه ظاهرة (rsCloseStatus بس هي اللي بتقفلها
+// فعليًا، مش وصول Terminal Status - راجع القرار المتعمد ده في rsUpdateMap) - فلو معملناش
+// كده، رد متأخر كان ممكن يرسم مسار جديد فوق خريطة مشوار خلص بالفعل. بتتنده من rsUpdateMap في
+// rides.js بس أول ما يوصل Terminal، بدون ما تلمس الخريطة/الماركرز نفسهم (زي clearRideStatusMap
+// اللي دي جزء منها أصلًا، لكن هنا من غير الهدم الكامل).
+export function invalidateRideStatusRoute() {
+  _rsRouteReqId++;
+}
+function rsComputeAndDrawRoute(origin, destination) {
+  const myReqId = ++_rsRouteReqId;
+  getRoute({ lat: origin[0], lng: origin[1] }, { lat: destination[0], lng: destination[1] })
+    .then(r => {
+      // Race Guard: نفس مبدأ computeAndDrawTrackRoute بالحرف - رد قديم من طلب سابق (مثلًا
+      // المندوب اتحرك تاني، أو الشاشة اتقفلت) لازم يتجاهل نفسه لو مش آخر طلب اتبعت.
+      if (myReqId !== _rsRouteReqId || !rsMap) return;
+      drawEncodedRoute(rsMap, r.polyline, 'rs-route');
+    })
+    .catch(() => {}); // فشل حساب المسار الديناميكي - المسار القديم (لو موجود) يفضل زي ما هو، صفر UI جديد لهيك
+}
 export function initRideStatusMap(rideData) {
   clearRideStatusMap();
   if (typeof maplibregl === 'undefined' || !rideData?.pickup) return;
@@ -843,6 +1043,10 @@ export function initRideStatusMap(rideData) {
     center: toLngLat(rideData.pickup), zoom: 13, attributionControl: false,
   });
   addStandardControls(rsMap);
+  // جديد (P11 Phase 5/11): نفس منطق dragstart/zoomstart في خريطة تتبع الطلبات - تفاعل يدوي
+  // حقيقي بس بيوقف Follow Mode، مش camera moves برمجية (easeTo).
+  rsMap.on('dragstart', () => { _rsFollowMode = false; });
+  rsMap.on('zoomstart', () => { _rsFollowMode = false; });
   markMapLoading('ride-status-map');
   attachMapErrorHandling(rsMap, () => { showToast('تعذر تحميل خريطة المشوار', 'err'); showMapErrorMsg('ride-status-map', 'تعذر تحميل الخريطة'); });
   rsMap.on('load', () => {
@@ -852,16 +1056,69 @@ export function initRideStatusMap(rideData) {
     createMapMarker(rsMap, rideData.pickup, 'pickup');
     if (rideData.dropoff) createMapMarker(rsMap, rideData.dropoff, 'dropoff');
     if (rideData.routeGeometry) drawEncodedRoute(rsMap, rideData.routeGeometry, 'rs-route');
-    fitToPoints(rsMap, [rideData.pickup, rideData.dropoff].filter(Boolean));
-    if (rideData.driverLocation) rsDriverMarker = createMapMarker(rsMap, rideData.driverLocation, 'driver');
+    _rsFitPoints = [rideData.pickup, rideData.dropoff].filter(Boolean);
+    if (rideData.driverLocation) {
+      // جديد (P12): بدل ما ننشئ الماركر هنا يدويًا (كان كده قبل كده ومش بيحسب مسار ديناميكي
+      // أول مرة)، بنستخدم updateRideStatusDriverLocation() نفسها - نفس المسار اللي كل تحديث
+      // GPS تاني بيعدي عليه، فلو المشوار اتفتح Reload وسط الطريق (مثلًا) والمندوب معروف
+      // موقعه من أول لحظة، المسار الديناميكي (مندوب->التقاط/وجهة) بيتحسب فورًا مش بس المسار
+      // الثابت (pickup->dropoff) اللي فوق.
+      updateRideStatusDriverLocation(rideData.driverLocation, rideData.status, rideData.pickup, rideData.dropoff);
+    } else {
+      fitToPoints(rsMap, _rsFitPoints);
+    }
   });
 }
-export function updateRideStatusDriverLocation(loc) {
-  if (!rsMap || !loc) return;
-  if (!rsDriverMarker) { rsDriverMarker = createMapMarker(rsMap, loc, 'driver'); }
-  else { rsDriverMarker.setLngLat([loc.lng, loc.lat]); }
+export function updateRideStatusDriverLocation(loc, status, pickup, dropoff) {
+  // جديد (P11 Phase 16 - Coordinate Validation): مفيش فحص NaN/Infinity هنا قبل كده (خلاف
+  // updateTrackDriverLocation في خريطة تتبع الطلبات اللي عندها الفحص ده بالفعل) - إحداثية
+  // فاسدة كانت هتوصل مباشرة لـ createMapMarker/animateMarkerMove.
+  if (!rsMap || !loc || !Number.isFinite(loc.lat) || !Number.isFinite(loc.lng)) return;
+  const toPos = [loc.lat, loc.lng];
+  if (!rsDriverMarker) {
+    rsDriverMarker = createMapMarker(rsMap, loc, 'driver');
+    _rsDriverAnimPos = toPos;
+    // جديد (P11 Phase 5A): أول ظهور لموقع المندوب بعد بناء الخريطة (لو ماكانش معروف وقت
+    // initRideStatusMap) - نفس مبدأ خريطة تتبع الطلبات: توسيع مرة واحدة بس يشمله.
+    fitToPoints(rsMap, [..._rsFitPoints, loc]);
+  } else {
+    const from = _rsDriverAnimPos || toPos;
+    animateMarkerMove(rsDriverMarker, from, toPos, _rsDriverAnimHolder);
+    _rsDriverAnimPos = toPos;
+    if (_rsFollowMode) rsMap.easeTo({ center: [loc.lng, loc.lat], duration: 900 });
+  }
+  // جديد (P12): المسار الديناميكي - مندوب->التقاط قبل الاستلام، مندوب->وجهة بعد الاستلام.
+  // بيتحسب تاني بس لو المرحلة اتغيرت أو المندوب اتحرك مسافة فعلية (ROUTE_RECALC_METERS) -
+  // مش مع كل نبضة GPS (نفس مبدأ خريطة تتبع الطلبات بالحرف).
+  const dest = RS_PRE_PICKUP_STATUSES.includes(status) ? pickup
+             : RS_POST_PICKUP_STATUSES.includes(status) ? dropoff
+             : null;
+  if (dest && Number.isFinite(dest.lat) && Number.isFinite(dest.lng)) {
+    const phase = RS_PRE_PICKUP_STATUSES.includes(status) ? 'to-pickup' : 'to-destination';
+    const phaseChanged = _rsRoutePhase !== phase;
+    const movedFar = !_rsRouteLastPos || _distMeters(_rsRouteLastPos[0], _rsRouteLastPos[1], toPos[0], toPos[1]) >= ROUTE_RECALC_METERS;
+    if (phaseChanged || movedFar) {
+      _rsRoutePhase = phase;
+      _rsRouteLastPos = toPos;
+      rsComputeAndDrawRoute(toPos, [dest.lat, dest.lng]);
+    }
+  }
+}
+// جديد (P11 Phase 5B): زرار توسيط لخريطة حالة المشوار - نفس فلسفة recenterTrackMap بالحرف
+// (يفعّل Follow Mode تاني، ويوسّط على المندوب لو موقعه معروف، أو على نقط الرحلة لو لسه لأ).
+export function recenterRideStatusMap() {
+  if (!rsMap) return;
+  _rsFollowMode = true;
+  if (_rsDriverAnimPos) {
+    rsMap.easeTo({ center: [_rsDriverAnimPos[1], _rsDriverAnimPos[0]], duration: 600 });
+  } else if (_rsFitPoints.length) {
+    fitToPoints(rsMap, _rsFitPoints);
+  }
 }
 export function clearRideStatusMap() {
+  if (_rsDriverAnimHolder.id) { cancelAnimationFrame(_rsDriverAnimHolder.id); _rsDriverAnimHolder.id = null; }
+  _rsDriverAnimPos = null; _rsFollowMode = true; _rsFitPoints = [];
+  _rsRouteReqId++; _rsRoutePhase = null; _rsRouteLastPos = null; // يبطل أي رد Routing ديناميكي لسه Pending
   if (rsMap) { rsMap.remove(); rsMap = null; }
   rsDriverMarker = null;
 }
@@ -881,12 +1138,29 @@ export function initDriverRegLocationMap(lat, lng) {
   attachMapErrorHandling(window._locMap, () => showMapErrorMsg('loc-map', 'تعذر تحميل الخريطة'));
   window._locMap.on('load', () => { markMapLoaded('loc-map'); window._locMap.resize(); createMapMarker(window._locMap, [lat, lng], 'customer'); });
 }
+// جديد (P10 - MapLibre Leak): dregBack() في driver.js بتخرج بره شاشة التسجيل بالكامل
+// (showScreen('screen-entry')) لما المستخدم يرجع من أول خطوة - من غير الدالة دي، window._locMap
+// (خريطة اختيار موقع المندوب وقت التسجيل) كانت بتفضل حيّة (WebGL Context + الـ 'load' listener
+// بتاعها) للأبد لحد ما المستخدم يرجع لشاشة التسجيل تاني في نفس الجلسة (initDriverRegLocationMap
+// بتهدم أي نسخة قديمة أوتوماتيك في أول سطرين ليها) - سيناريو نادر (مرة واحدة في الغالب لكل
+// جهاز) لكنه Leak حقيقي زي باقي الخرائط.
+export function destroyDriverRegLocationMap() {
+  if (window._locMap) { window._locMap.remove(); window._locMap = null; }
+}
 
 // ===== تصفير أعلام المتابعة عند تسجيل الخروج (بيتنفذ من utils.js عبر clearAllListeners) =====
 export function registerMapsResets() {
   onListenersCleared(() => {
-    trackDriverUnsub = null;
+    trackCustLoc = null;
     drvSelfMarker = null; drvPickupMarker = null; driverMapRideData = null;
+    // جديد (P10 - MapLibre Leak, Logout Cleanup): window.drvMap (خريطة المندوب الذاتية -
+    // toggleDriverMap في نفس الملف) كانت الخريطة الوحيدة المتبقية اللي مش بتتهدم هنا عند تسجيل
+    // الخروج - كل الخرائط التانية (admMap تحت، trackMap/rsMap/locPickerMap/rrMap) عندها هدم
+    // فعلي إما هنا أو في registerRidesResets المكافئة. من غيرها: toggleDriverMap() بتفحص فقط
+    // "if (!window.drvMap)" قبل ما تبني خريطة جديدة - يعني بعد Logout ثم تسجيل دخول تاني (بنفس
+    // الـ Tab من غير Refresh)، كانت هتستخدم نفس WebGL Context/الخريطة القديمة (لسه مربوطة
+    // بمركز خرائط المستخدم السابق) بدل ما تُبنى من جديد لحاوية "driver-map" الحالية.
+    if (window.drvMap) { window.drvMap.remove(); window.drvMap = null; }
     // P1: تسجيل الخروج = "هدم حقيقي" (زي ما اتطلب صراحة - الحالة الوحيدة اللي لسه بنعمل فيها
     // remove() لخريطة الأدمن). صفر تسوية تدريجية هنا عمدًا - الجلسة خلصت فعلاً.
     if (window.admMap) { window.admMap.remove(); window.admMap = null; }

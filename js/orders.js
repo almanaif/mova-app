@@ -5,7 +5,7 @@ import { getPricingConfig, calculateFare } from './pricing.js';
 import { NEW_STEPS, NEW_STEP_ICONS, NEW_STEP_LABELS, SL, esc, normalizeStatus, onListenersCleared, onSnapshot, showScreen, showToast } from './utils.js';
 import { custNav, updateCartUI } from './customer.js';
 import { createNotification } from './notifications.js';
-import { initTrackMap, trackPhaseKey } from './maps.js';
+import { initTrackMap, trackPhaseKey, updateTrackDriverLocation, destroyTrackMap } from './maps.js';
 import { reverseGeocode, getRoute } from './routing.js';
 
 // =====================================================================================
@@ -147,6 +147,24 @@ export async function merchCancelOrd(orderId, actor, reason = '') {
 }
 
 // =====================================================================================
+// LIVE DRIVER LOCATION (Delivery Tracking Hardening - P7)
+// =====================================================================================
+// بتتنده من driver.js من جوه نفس نبضة GPS المتحكم فيها بالفعل (10 ثواني/30 متر - راجع
+// startGPS في driver.js) - صفر Watcher/Timer/Loop تاني، بس كتابة إضافية (orders/{orderId})
+// تتضاف لنفس النبضة، ونفس المعمارية المستخدمة بالفعل لـ rides/{rideId}.driverLocation
+// (updateDriverLocationForActiveRide في rides.js). driver.js هو اللي بيحدد orderId الصحيح
+// (من الـ Snapshot الحي driverOrdersUnsub - مش من activeOrderId المخزّن في users/{uid} لوحده)
+// وبيتأكد إن الطلب لسه نشط ومسند له فعليًا قبل النداء هنا (راجع _updateHasActiveDeliveryOrder).
+// الحماية الحقيقية (مين يقدر يكتب driverLocation فين وامتى) في firestore.rules
+// (orderDriverLocationUpdateOk) - هنا بس نادي updateDoc، من غير أي منطق تحقق إضافي مكرر.
+export function updateDriverLocationForOrder(orderId, lat, lng) {
+  if (!orderId) return;
+  updateDoc(doc(db, 'orders', orderId), {
+    driverLocation: { lat, lng, updatedAt: serverTimestamp() },
+  }).catch(() => {});
+}
+
+// =====================================================================================
 // DISPATCH ENGINE
 // =====================================================================================
 // المرحلة الحالية: أول مندوب Online يشوف الطلب (لسه محدّدش المسافة) هو اللي بيقبله؛ القفل
@@ -228,7 +246,10 @@ export async function goCheckout() {
   if (!window.cart.length) { showToast('السلة فارغة!', 'err'); return; }
   if (!window.CU) { showScreen('screen-entry'); return; }
   if (window.cart.length > 12) { showToast('الحد الأقصى 12 صنف مختلف في الطلب الواحد', 'err'); return; }
-  if (!window.userLat || !window.userLng) {
+  // جديد (P12.1 - GPS Truthy Check): كان "!window.userLat || !window.userLng" - truthy check
+  // بيرفض بالغلط إحداثية صالحة قيمتها 0 (خط الاستواء/خط غرينتش) كـ"مش محدد"، ومش الفحص الصحيح
+  // لصلاحية GPS عمومًا. Number.isFinite() هي الفحص الصحيح.
+  if (!Number.isFinite(window.userLat) || !Number.isFinite(window.userLng)) {
     showToast('حدد موقعك أولاً من زر 📍 قبل إتمام الطلب', 'err');
     return;
   }
@@ -356,6 +377,19 @@ export let trackUnsub = null;
 // ومنعيدش الـ init إلا لو الطلب اتغير فعلًا أو المندوب اتعيّن/اتغيّر (المسار والمتجر والعميل
 // ثابتين، فمفيش داعي لإعادة الحساب لمجرد تحديث حالة أو إجمالي).
 let _trackMapFor = { orderId: null, driverId: undefined, phase: undefined };
+// جديد (P9 - Final Hardening - Tracking Listener Leak): زرار "رجوع للرئيسية" في شاشة التتبع
+// (index.html) كان بينادي showScreen('screen-customer') مباشرة - من غير ما يقفل trackUnsub
+// (Firestore Listener على orders/{orderId}) ولا trackMap (خريطة MapLibre كاملة). النتيجة:
+// أي عميل يفتح تتبع طلب ويرجع للرئيسية، الـ Listener فاضل شغال في الخلفية (يستهلك شبكة/بطارية
+// ويستقبل كل تحديث GPS للمندوب) لحد ما يفتح تتبع طلب تاني (بيقفل القديم أوتوماتيك جوه
+// openTrack) أو يعمل Logout. دلوقتي الزرار بينادي closeTrack() دي بدل showScreen() مباشرة.
+export function closeTrack() {
+  if (trackUnsub) { try { trackUnsub(); } catch (e) {} trackUnsub = null; }
+  _trackMapFor = { orderId: null, driverId: undefined, phase: undefined };
+  destroyTrackMap();
+  showScreen('screen-customer');
+}
+
 export function openTrack(ordId) {
   showScreen('screen-track');
   if (trackUnsub) { try { trackUnsub(); } catch (e) {} trackUnsub = null; }
@@ -420,7 +454,12 @@ export function openTrack(ordId) {
     const phase = trackPhaseKey(status);
     if (_trackMapFor.orderId !== ordId || _trackMapFor.driverId !== (o.driverId || null) || _trackMapFor.phase !== phase) {
       _trackMapFor = { orderId: ordId, driverId: o.driverId || null, phase };
-      initTrackMap(o, status);
+      initTrackMap(o, status); // initTrackMap نفسها بترسم أول موقع مندوب متاح وقت البناء (راجع maps.js)
+    } else {
+      // جديد (Delivery Tracking Hardening - P7): مصدر موقع المندوب دلوقتي orders/{orderId}.driverLocation
+      // - نفس المستند اللي الـ onSnapshot ده أصلًا شغال عليه (مش users/{driverId})، فكل نبضة GPS
+      // جديدة من المندوب (driver.js) بتوصل هنا تلقائيًا من غير أي Listener إضافي.
+      updateTrackDriverLocation(o, status);
     }
   });
 }

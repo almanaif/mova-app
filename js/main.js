@@ -5,8 +5,8 @@ import { db, auth, doc, getDoc, onAuthStateChanged, getRedirectResult,
          isSignInWithEmailLink, signInWithEmailLink } from './firebase.js';
 import { Logger, initOfflineHandling, callCurrentStore, callStore, closeModal, filterProds, openNotifs, openWA, setLoad, showErr, showScreen, showToast, waCurrentStore } from './utils.js';
 import { markNotifRead, startNotifListener, registerNotificationsResets } from './notifications.js';
-import { initAdminMap, initTrackMap, closeLocationPicker, locPickerConfirm, locPickerUseCurrent, locPickerOnSearchInput, locPickerOnCategoryClick, locPickerOnResultClick, recenterTrackMap, toggleDriverMap, registerMapsResets } from './maps.js';
-import { goCheckout, openTrack, registerOrdersResets } from './orders.js';
+import { initAdminMap, initTrackMap, closeLocationPicker, locPickerConfirm, locPickerUseCurrent, locPickerOnSearchInput, locPickerOnCategoryClick, locPickerOnResultClick, recenterTrackMap, recenterRideStatusMap, toggleDriverMap, registerMapsResets } from './maps.js';
+import { goCheckout, openTrack, closeTrack, registerOrdersResets } from './orders.js';
 import { addCart, chgQty, custCancelOrderUI, custNav, doSearch, filterCat, loadBanners, loadCategories, loadCoupons, loadCustomerData, loadOrders, loadProducts, loadProductsByStore, loadStores, openAnyReq, openCart, openCustomerLocationPicker, quickReq, removeCartItem, renderProds, selMCat, selectRatingTarget, sendAnyReq, setStar, submitMerchant, submitRating, updateCartUI, registerCustomerResets } from './customer.js';
 import { acceptOrd, agreeTermsModal, buildChart, closeTermsModal, closeZoom, dregBack, dregGetLocation, dregInit, dregNext, dregRestart, dregSaveDraft, dregSetExp, drvNav, getLocation, listenNewOrders, loadDriverData, loadDriverOrders, openTermsModal, removeUploadedDoc, startGPS, submitDrvReg, toggleAgree, toggleOnline, updOrdStatus, uploadDoc, zoomDoc, registerDriverResets } from './driver.js';
 import { delProd, loadMerchantData, loadMerchantOrders, loadMerchantProds, merchAcceptOrd, merchCancelOrdUI, merchRejectOrd, openAddProd, openMerchantLocationPicker, saveProd, uploadProductImage, removeProductImage, registerMerchantResets } from './merchant.js';
@@ -14,7 +14,7 @@ import { admAccDrv, admAccStore, admDelProd, admLogoutConfirm, admNav, admRejDrv
 import { onCustomerSearchInput, filterCustomersByStatus, loadMoreCustomers, openCustomerDetails, closeCustomerDetails, saveCustomerBasicInfo, toggleCustomerBlock, softDeleteCustomer, loadMoreCustomerOrders, registerCustomerListReset } from './admin-customers.js';
 import { loadMoreMerchantRequests, loadMoreAnyRequests, acceptMerchantRequest, rejectMerchantRequest, addNoteToMerchantRequest, acceptAnyRequest, rejectAnyRequest, addNoteToAnyRequest } from './admin-requests.js';
 import { completeRegistration, doLogin, doLogout, doRegister, firebaseAuthErrorMessage, handleGoogleAccountConflict, hideLoading, loginGoogle, pickEntryType, routeUser, selCMCat, showEmailOTP, showForgot, submitMerchantProfile, switchTab, syncToHubSpot, updateEntryLabel } from './auth.js';
-import { openRideRequest, resetRideRequest, selectRideVehicle, createRideRequest, acceptRideOffer, rejectRideOffer, retryDispatch, handleDriverRideAction, registerRidesResets } from './rides.js';
+import { openRideRequest, resetRideRequest, rrClose, selectRideVehicle, createRideRequest, acceptRideOffer, rejectRideOffer, retryDispatch, handleDriverRideAction, rsCloseStatus, registerRidesResets } from './rides.js';
 import { sendExternalPurchase, retryExternalDispatch, acceptExternalOffer, rejectExternalOffer, handleDriverExternalAction, reportItemUnavailableFromPanel, reportBudgetExceededFromPanel, epCustomerCancel, epCustomerContinue, epCloseStatus, epOpenLocationPicker, epCancelAnyReq, registerExternalResets } from './external.js';
 import { renderIcons } from './icons.js';
 import { initLocationPermissionGate } from './location-permission.js';
@@ -45,7 +45,7 @@ registerExternalResets();
 Object.assign(window, {
   callCurrentStore, callStore, closeModal, filterProds, openNotifs, openWA, setLoad, showErr,
   showScreen, showToast, waCurrentStore, markNotifRead, startNotifListener, initAdminMap,
-  initTrackMap, recenterTrackMap, toggleDriverMap, goCheckout, openTrack, addCart, chgQty, custNav, doSearch,
+  initTrackMap, recenterTrackMap, recenterRideStatusMap, toggleDriverMap, goCheckout, openTrack, closeTrack, addCart, chgQty, custNav, doSearch,
   locPickerConfirm, locPickerUseCurrent, locPickerOnSearchInput, locPickerOnCategoryClick, locPickerOnResultClick, openCustomerLocationPicker, closeLocationPicker,
   filterCat, loadBanners, loadCategories, loadCoupons, loadCustomerData, loadOrders,
   loadProducts, loadProductsByStore, loadStores, openAnyReq, openCart, quickReq,
@@ -65,8 +65,8 @@ Object.assign(window, {
   smQuickPause, smSaveProfile, smSetAccountStatus, smSetOpen, smTab, smUploadCover,
   smUploadLogo, toggleProdAvail, uploadBannerImg, doLogin, doLogout, doRegister, hideLoading,
   loginGoogle, pickEntryType, routeUser, completeRegistration, submitMerchantProfile, selCMCat, showEmailOTP, showForgot, switchTab,
-  syncToHubSpot, updateEntryLabel, openRideRequest, resetRideRequest, selectRideVehicle, createRideRequest,
-  acceptRideOffer, rejectRideOffer, retryDispatch, handleDriverRideAction,
+  syncToHubSpot, updateEntryLabel, openRideRequest, resetRideRequest, rrClose, selectRideVehicle, createRideRequest,
+  acceptRideOffer, rejectRideOffer, retryDispatch, handleDriverRideAction, rsCloseStatus,
   sendExternalPurchase, retryExternalDispatch, acceptExternalOffer, rejectExternalOffer,
   handleDriverExternalAction, reportItemUnavailableFromPanel, reportBudgetExceededFromPanel,
   epCustomerCancel, epCustomerContinue, epCloseStatus, epOpenLocationPicker, epCancelAnyReq
