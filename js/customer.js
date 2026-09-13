@@ -1,7 +1,7 @@
 // ===== customer.js — شاشات العميل: تصفح المتاجر/المنتجات، السلة، الطلبات، التقييم، طلبات عامة =====
 
-import { addDoc, collection, db, getCountFromServer, limit, orderBy, query, serverTimestamp, where } from './firebase.js';
-import { SL, NEW_STEPS, NEW_STEP_ICONS, NEW_STEP_LABELS, callStore, closeModal, debounce, esc, escJs, filterProds, normalizeStatus, onListenersCleared, onSnapshot, openWA, orderStatusBadge, showScreen, showToast } from './utils.js';
+import { addDoc, collection, db, doc, getCountFromServer, limit, orderBy, query, serverTimestamp, updateDoc, where } from './firebase.js';
+import { SL, NEW_STEPS, NEW_STEP_ICONS, NEW_STEP_LABELS, callStore, closeModal, debounce, esc, escJs, filterProds, isValidPhone, normalizeStatus, onListenersCleared, onSnapshot, openWA, orderStatusBadge, showScreen, showToast } from './utils.js';
 import { ORDER_STATUS, custCancelOrder, openTrack } from './orders.js';
 import { icon } from './icons.js';
 import { openLocationPicker } from './maps.js';
@@ -317,8 +317,49 @@ export function loadCustomerData() {
   if (phoneLine) { if (ud.phone) { document.getElementById('cust-phone').textContent = ud.phone; phoneLine.style.display = 'flex'; } else phoneLine.style.display = 'none'; }
   const addrLine = document.getElementById('cust-address-line');
   if (addrLine) { if (ud.address) { document.getElementById('cust-address').textContent = ud.address; addrLine.style.display = 'flex'; } else addrLine.style.display = 'none'; }
+  // P14 (البند 2 - Profile Completion): بانر واضح لكن غير مزعج (مكانه جوه "حسابي" - مش Popup
+  // إجباري وقت الدخول) يظهر بس لو رقم التليفون أو العنوان ناقصين فعليًا - نفس فلسفة إظهار/إخفاء
+  // phoneLine/addrLine فوق (صفر بيانات وهمية، عرض حسب الحالة الحقيقية بس).
+  const banner = document.getElementById('cust-complete-banner');
+  if (banner) banner.style.display = (!ud.phone || !ud.address) ? 'flex' : 'none';
   loadOrders();
   loadStores();
+}
+
+// ===== P14 (البند 2) - إكمال بيانات الملف الشخصي (تليفون/عنوان) لاحقًا من "حسابي" =====
+// نفس مصدر الحقيقة الموجود بالفعل (users/{uid} في Firestore، window.CUD) - صفر مستند/نظام
+// جديد. firestore.rules الحالية (allow update لصاحب المستند نفسه) تسمح بالتحديث ده بالفعل
+// من غير أي تعديل على الـ Rules (role/status بيفضلوا زي ما هما).
+export function openCustCompleteProfile() {
+  if (!window.CUD) return;
+  const p = document.getElementById('ccp-phone'); if (p) p.value = window.CUD.phone || '';
+  const a = document.getElementById('ccp-address'); if (a) a.value = window.CUD.address || '';
+  document.getElementById('cust-complete-modal')?.classList.add('open');
+}
+let ccpSaving = false;
+export async function saveCustCompleteProfile() {
+  if (!window.CU || ccpSaving) return;
+  const phone = document.getElementById('ccp-phone')?.value?.trim() || '';
+  const address = document.getElementById('ccp-address')?.value?.trim() || '';
+  // P14.1 (البند 3 - Phone Validation): لو العميل كتب حاجة في حقل الهاتف، لازم تكون شكل رقم
+  // منطقي (صفر فاضي/مسافات/رموز بس) - نفس isValidPhone الموحّدة المستخدمة في orders.js
+  // (البند 4). لو الحقل فاضي تمامًا، مسموح يحفظ العنوان لوحده والبانر يفضل ظاهر لحد ما
+  // يضيف رقم صحيح لاحقًا (راجع loadCustomerData).
+  if (phone && !isValidPhone(phone)) {
+    showToast('رقم الهاتف غير صحيح، تأكد من كتابته بشكل صحيح', 'err');
+    return;
+  }
+  if (!phone && !address) { closeModal('cust-complete-modal'); return; }
+  ccpSaving = true;
+  try {
+    await updateDoc(doc(db, 'users', window.CU.uid), { phone, address, updatedAt: serverTimestamp() });
+    window.CUD = { ...window.CUD, phone, address };
+    closeModal('cust-complete-modal');
+    showToast('تم حفظ بياناتك ✅', 'ok');
+    loadCustomerData();
+  } catch (e) {
+    showToast('تعذر حفظ البيانات، حاول مرة أخرى', 'err');
+  } finally { ccpSaving = false; }
 }
 
 // عدد الطلبات الحقيقي (Count دقيق عبر getCountFromServer، مش من قائمة الـ 10 الأخيرة المحدودة
@@ -449,7 +490,7 @@ export async function sendAnyReq(){
   if(!txt){showToast('يرجى كتابة طلبك','err');return;}
   try{
     await addDoc(collection(db,'any_requests'),{customerId:window.CU?.uid||'guest',customerName:window.CUD?.name||'عميل',request:txt,address:document.getElementById('any-req-addr').value,status:'new',createdAt:serverTimestamp()});
-    closeModal('any-req-modal');showToast('تم إرسال طلبك! سيتواصل معك المندوب قريباً','ok');
+    closeModal('any-req-modal');showToast('تم إرسال طلبك! سيتواصل معك الكابتن قريباً','ok');
   }catch(e){closeModal('any-req-modal');showToast('حدث خطأ أثناء إرسال الطلب، حاول مرة أخرى','err');console.error('[sendAnyReq]',e);}
 }
 

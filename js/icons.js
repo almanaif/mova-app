@@ -53,6 +53,7 @@ const PATHS = {
   // ===== إضافات Phase: Driver/Merchant Icon Polish — نفس الأسلوب بالظبط (outline, stroke-width=2, viewBox 24x24) =====
   calendar: '<rect x="3.5" y="5" width="17" height="15.5" rx="1.5"/><path d="M3.5 9.5h17"/><path d="M8 3v4"/><path d="M16 3v4"/>',
   tag: '<rect x="2.5" y="7" width="19" height="10" rx="2"/><path d="M8 7v10"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/>',
   camera: '<path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2l1-2h7l1 2h2A1.5 1.5 0 0 1 20 8.5v9A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5Z"/><circle cx="12" cy="13" r="3.5"/>',
   refresh: '<path d="M20 12a8 8 0 0 0-14.5-4.5L3 10"/><path d="M3 4v6h6"/><path d="M4 12a8 8 0 0 0 14.5 4.5L21 14"/><path d="M21 20v-6h-6"/>',
   edit: '<path d="M17.5 3.5a2.1 2.1 0 0 1 3 3L8 19 4 20l1-4Z"/><path d="M14.5 6.5 17.5 9.5"/>',

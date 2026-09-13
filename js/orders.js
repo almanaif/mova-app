@@ -2,8 +2,8 @@
 
 import { addDoc, collection, db, doc, getDoc, runTransaction, serverTimestamp, updateDoc, query, where } from './firebase.js';
 import { getPricingConfig, calculateFare } from './pricing.js';
-import { NEW_STEPS, NEW_STEP_ICONS, NEW_STEP_LABELS, SL, esc, normalizeStatus, onListenersCleared, onSnapshot, showScreen, showToast } from './utils.js';
-import { custNav, updateCartUI } from './customer.js';
+import { NEW_STEPS, NEW_STEP_ICONS, NEW_STEP_LABELS, SL, esc, isValidPhone, normalizeStatus, onListenersCleared, onSnapshot, showScreen, showToast } from './utils.js';
+import { custNav, openCustCompleteProfile, updateCartUI } from './customer.js';
 import { createNotification } from './notifications.js';
 import { initTrackMap, trackPhaseKey, updateTrackDriverLocation, destroyTrackMap } from './maps.js';
 import { reverseGeocode, getRoute } from './routing.js';
@@ -38,10 +38,10 @@ export const ORDER_STATUS = {
 const STATUS_NOTIF = {
   [ORDER_STATUS.MERCHANT_ACCEPTED]: { to: 'customerId', title: '✅ التاجر وافق على طلبك', body: 'جاري تجهيز طلبك الآن', type: 'or' },
   [ORDER_STATUS.MERCHANT_REJECTED]: { to: 'customerId', title: '❌ تم رفض طلبك', body: 'للأسف رفض المتجر طلبك، تواصل معه لمعرفة السبب', type: 'yw' },
-  [ORDER_STATUS.SEARCHING_DRIVER]:  { to: 'customerId', title: '🔎 جاري البحث عن مندوب', body: 'هنبلغك فور ما يتم تعيين مندوب لطلبك', type: 'gn' },
-  [ORDER_STATUS.DRIVER_ARRIVED]:    { to: 'customerId', title: '📍 المندوب وصل للمتجر', body: 'المندوب استلم مكان التجهيز وهيتحرك قريب', type: 'bl' },
-  [ORDER_STATUS.PICKED_UP]:         { to: 'customerId', title: '📦 تم استلام طلبك', body: 'المندوب استلم طلبك من المتجر', type: 'bl' },
-  [ORDER_STATUS.ON_THE_WAY]:        { to: 'customerId', title: '🛵 طلبك في الطريق', body: 'المندوب في طريقه إليك الآن', type: 'bl' },
+  [ORDER_STATUS.SEARCHING_DRIVER]:  { to: 'customerId', title: '🔎 جاري البحث عن كابتن', body: 'هنبلغك فور ما يتم تعيين كابتن لطلبك', type: 'gn' },
+  [ORDER_STATUS.DRIVER_ARRIVED]:    { to: 'customerId', title: '📍 الكابتن وصل للمتجر', body: 'الكابتن استلم مكان التجهيز وهيتحرك قريب', type: 'bl' },
+  [ORDER_STATUS.PICKED_UP]:         { to: 'customerId', title: '📦 تم استلام طلبك', body: 'الكابتن استلم طلبك من المتجر', type: 'bl' },
+  [ORDER_STATUS.ON_THE_WAY]:        { to: 'customerId', title: '🛵 طلبك في الطريق', body: 'الكابتن في طريقه إليك الآن', type: 'bl' },
   [ORDER_STATUS.DELIVERED]:         { to: 'customerId', title: '✅ تم التسليم', body: 'نتمنى تكون استمتعت بطلبك، قيّم تجربتك!', type: 'gn' },
   [ORDER_STATUS.CANCELLED]:         { to: 'customerId', title: '❌ تم إلغاء الطلب', body: 'تم إلغاء طلبك', type: 'yw' },
 };
@@ -188,15 +188,28 @@ export function rankCandidateDrivers(order, onlineDrivers) {
 
 // المندوب بيقبل الطلب: بيتأكد إن الطلب لسه searching_driver ومفيهوش مندوب، وإن المندوب
 // نفسه مش مشغول بطلب تاني حاليًا (activeOrderId) - كله في نفس الـ Transaction الذرية.
-// جديد (حماية رقم العميل - Option B): customerPhone بقى بيتحط جوه الطلب هنا بس، لحظة تعيين
-// المندوب، ومصدره الحقيقي هو مستند العميل نفسه (users/{customerId}) - مش أي قيمة بيبعتها
-// المتصفح. قبل كده الرقم كان بيتخزن وقت إنشاء الطلب، فأي مندوب Online كان يقدر يقراه
-// وهو لسه searching_driver قبل ما يقبل الطلب أصلاً. دلوقتي محدش يشوف الرقم غير المندوب
-// المعيّن فعليًا (Firestore Rules بترفض غير كده - راجع firestore.rules).
+// جديد (P14.2 - Root Cause & Fix): قراءة رقم العميل (users/{customerId}.phone) بتتم في خطوة
+// منفصلة (2) بعد التزام الـ Transaction، مش جواها - لحظة القراءة، Firestore Rules بتتأكد إن
+// المندوب فعلاً مرتبط بالعميل ده (isMyActiveOrderCustomer في firestore.rules) عن طريق
+// activeOrderId على مستند المندوب نفسه، اللي بقى بيتعيّن جوه نفس الـ Transaction الأساسية
+// (راجع P14.3.1 تحت).
+// جديد (P14.3 - Users Self-Write Hardening): users/{driverUid}.activeOrderId بقى ليه Rule
+// بتتحقق فعليًا إن orders/{activeOrderId}.driverId == المندوب نفسه (مش أي orderId عشوائي -
+// راجع firestore.rules).
+// جديد (P14.3.1 - Atomicity Restored): activeOrderId رجع يتحط جوه نفس الـ Transaction
+// الأساسية (مش خطوة منفصلة زي P14.3) - Firestore Rules دلوقتي بتستخدم getAfter() بدل get()
+// للتحقق من orders/{activeOrderId}.driverId، وgetAfter() موثّقة رسميًا من Firebase تحديدًا
+// لـ"validating documents that are part of a batched write or transaction" (راجع تعليق
+// firestore.rules للتفاصيل والمصدر). ده بيقفل نافذة الـ Race الضيقة اللي كانت موجودة في
+// تصميم P14.3 المؤقت (مندوب يقبل طلبين قريبين من بعض جدًا قبل ما busy-flag يتحدّث) - دلوقتي
+// كله (تعيين + busy-flag) بيتقفل سوا ذرّيًا زي ما كان قبل P14.3 بالظبط.
+// ⚠️ ملحوظة صراحة: سلوك getAfter() ده اتأكد من التوثيق الرسمي المباشر لـ Firebase (مش تخمين)،
+// لكن مش متحقق منه فعليًا عبر Firestore Emulator في البيئة دي (مش متاح - راجع التقرير النهائي).
 export async function acceptOrderAsDriver(orderId, driverUid, driverName, driverPhone) {
   const orderRef = doc(db, 'orders', orderId);
   const userRef = doc(db, 'users', driverUid);
   let orderForNotif = null;
+  let customerId = null;
   await runTransaction(db, async (t) => {
     const uSnap = await t.get(userRef);
     if (uSnap.data()?.activeOrderId || uSnap.data()?.activeRideId || uSnap.data()?.activeExternalPurchaseId) throw new Error('busy');
@@ -204,19 +217,29 @@ export async function acceptOrderAsDriver(orderId, driverUid, driverName, driver
     const cur = oSnap.data();
     if (!cur || cur.driverId) throw new Error('taken');
     if (!canTransition(cur.status, ORDER_STATUS.DRIVER_ASSIGNED)) throw new Error('invalid-transition');
-    const custSnap = await t.get(doc(db, 'users', cur.customerId));
-    const customerPhone = custSnap.data()?.phone || '';
     orderForNotif = cur;
+    customerId = cur.customerId;
     const historyEntry = { from: cur.status, to: ORDER_STATUS.DRIVER_ASSIGNED, at: Date.now(), by: { type: 'driver', uid: driverUid, name: driverName } };
     const history = Array.isArray(cur.statusHistory) ? [...cur.statusHistory, historyEntry] : [historyEntry];
     t.update(orderRef, {
       status: ORDER_STATUS.DRIVER_ASSIGNED, driverId: driverUid, driverName: driverName || '', driverPhone: driverPhone || '',
-      customerPhone, acceptedAt: serverTimestamp(), updatedAt: serverTimestamp(), statusHistory: history,
+      acceptedAt: serverTimestamp(), updatedAt: serverTimestamp(), statusHistory: history,
     });
     t.update(userRef, { activeOrderId: orderId });
   });
   if (orderForNotif) {
-    createNotification(orderForNotif.customerId, '🛵 تم تعيين مندوب لطلبك', `${driverName || 'المندوب'} في طريقه لاستلام طلبك من المتجر`, 'or', orderId, 'driver_assigned');
+    createNotification(orderForNotif.customerId, '🛵 تم تعيين مندوب لطلبك', `${driverName || 'الكابتن'} في طريقه لاستلام طلبك من المتجر`, 'or', orderId, 'driver_assigned');
+  }
+  // خطوة 2 (P14.2 - Best-Effort): الطلب اتقفل فعلاً للمندوب ده (activeOrderId اتحط بالفعل جوه
+  // نفس الـ Transaction فوق)، فدلوقتي isMyActiveOrderCustomer في firestore.rules هتسمح بأمان.
+  if (customerId) {
+    try {
+      const custSnap = await getDoc(doc(db, 'users', customerId));
+      const customerPhone = custSnap.data()?.phone || '';
+      if (customerPhone) await updateDoc(orderRef, { customerPhone, updatedAt: serverTimestamp() });
+    } catch (e) {
+      console.error('[acceptOrderAsDriver] تعذرت قراءة/تحديث رقم العميل (غير قاطع - الطلب متعيّن بالفعل)', e);
+    }
   }
 }
 
@@ -245,6 +268,17 @@ export async function merchantRespond(orderId, accept, actor) {
 export async function goCheckout() {
   if (!window.cart.length) { showToast('السلة فارغة!', 'err'); return; }
   if (!window.CU) { showScreen('screen-entry'); return; }
+  // P14.1 (البند 4 - Phone Required Before Order): التسجيل فضل بسيط عمدًا (مفيش رقم هاتف
+  // مطلوب فيه - راجع P14)، لكن المندوب فعليًا بياخد رقم العميل من users/{customerId}.phone
+  // لحظة قبول الطلب (acceptOrderAsDriver تحت) عشان يقدر يتواصل معاه أثناء التوصيل - فلو
+  // الرقم فاضي/غير صحيح، الطلب هيتبعت والمندوب مش هيقدر يكلم العميل خالص. الفحص هنا بس،
+  // لحظة "إتمام الطلب" الفعلية، مش قبل كده ومش بيمنع الدخول للتطبيق. isValidPhone موحّدة
+  // (utils.js) - نفس الفحص المستخدم في customer.js وقت حفظ البيانات.
+  if (!isValidPhone(window.CUD?.phone)) {
+    showToast('من فضلك أضف رقم هاتفك أولًا لإتمام الطلب', 'err');
+    openCustCompleteProfile();
+    return;
+  }
   if (window.cart.length > 12) { showToast('الحد الأقصى 12 صنف مختلف في الطلب الواحد', 'err'); return; }
   // جديد (P12.1 - GPS Truthy Check): كان "!window.userLat || !window.userLng" - truthy check
   // بيرفض بالغلط إحداثية صالحة قيمتها 0 (خط الاستواء/خط غرينتش) كـ"مش محدد"، ومش الفحص الصحيح
@@ -350,9 +384,15 @@ export async function goCheckout() {
     });
     window.cart = []; updateCartUI();
     showToast('✅ تم إرسال طلبك بنجاح!', 'ok');
-    const newPts = (window.CUD?.points || 0) + Math.floor(total / 10);
-    await updateDoc(doc(db, 'users', window.CU.uid), { points: newPts });
-    window.CUD = { ...window.CUD, points: newPts };
+    // P18.1: نقاط الولاء (points) بقت Admin-only في firestore.rules (كانت client-trust بالكامل
+    // من غير أي تحقق حقيقي مرتبط بالطلب - راجع الشرح في الملف). الكتابة دي متوقع فشلها دلوقتي
+    // بـ permission-denied؛ try/catch هنا يمنع فشلها من كسر إتمام الطلب نفسه (اللي نجح بالفعل
+    // فوق) - نقاط الولاء الحقيقية محتاجة Backend موثوق (Deferred - راجع تقرير P18.1).
+    try {
+      const newPts = (window.CUD?.points || 0) + Math.floor(total / 10);
+      await updateDoc(doc(db, 'users', window.CU.uid), { points: newPts });
+      window.CUD = { ...window.CUD, points: newPts };
+    } catch (e) { /* متوقع - راجع تعليق P18.1 فوق */ }
     showScreen('screen-customer');
     custNav('orders', document.querySelectorAll('#screen-customer .nav-item')[1]);
     createNotification(orderStoreId, '🆕 طلب جديد', `طلب جديد من ${window.CUD?.name || 'عميل'} بقيمة ${total} ج`, 'or', ref.id, 'order_created_merchant');
@@ -399,7 +439,7 @@ export function openTrack(ordId) {
     const o = { ...snap.data(), id: snap.id };
     window._currentTrackOrd = o;
     const status = normalizeStatus(o.status || 'waiting_merchant');
-    document.getElementById('track-driver').textContent = o.driverName || 'بانتظار المندوب...'; // textContent آمنة أصلاً ومش محتاجة esc()
+    document.getElementById('track-driver').textContent = o.driverName || 'بانتظار الكابتن...'; // textContent آمنة أصلاً ومش محتاجة esc()
     // جديد (Map Professionalization Sprint): كان في نص ثابت "15-25 دقيقة" لكل الطلبات هنا -
     // اتشال. initTrackMap() في maps.js دلوقتي هي المسؤولة عن حساب/عرض وقت التوصيل الحقيقي
     // (ومسافة حقيقية كمان) لأنها هي اللي عندها بيانات المسار الفعلي (متجر->عميل).
@@ -412,7 +452,7 @@ export function openTrack(ordId) {
       const driverAssigned = !!o.driverId && status !== ORDER_STATUS.SEARCHING_DRIVER && status !== ORDER_STATUS.WAITING_MERCHANT && status !== ORDER_STATUS.MERCHANT_ACCEPTED;
       if (driverAssigned && o.driverPhone) {
         contactBox.style.display = 'flex';
-        contactBox.innerHTML = `<button class="ha-btn ha-call" onclick="callStore('${esc(o.driverPhone)}')">📞 اتصل بالمندوب</button><button class="ha-btn ha-wa" onclick="openWA('${esc(o.driverPhone)}','${esc(o.driverName||'المندوب')}')">💬 واتساب</button>`;
+        contactBox.innerHTML = `<button class="ha-btn ha-call" onclick="callStore('${esc(o.driverPhone)}')">📞 اتصل بالكابتن</button><button class="ha-btn ha-wa" onclick="openWA('${esc(o.driverPhone)}','${esc(o.driverName||'الكابتن')}')">💬 واتساب</button>`;
       } else {
         contactBox.style.display = 'none';
         contactBox.innerHTML = '';

@@ -47,8 +47,8 @@ export const RIDE_ELIGIBLE_VEHICLES = ['motorcycle', 'tuktuk', 'car'];
 // (created/waiting_merchant/...) هي اللي بقى يستخدمها Order Engine الجديد في orders.js.
 export const SL = {new:'جديد',accepted:'تم القبول',preparing:'جاري التحضير',ready:'جاهز',delivering:'في الطريق',done:'تم التسليم',cancelled:'ملغي',
   created:'تم إنشاء الطلب', waiting_merchant:'بانتظار موافقة التاجر', merchant_accepted:'تم قبول التاجر',
-  merchant_rejected:'تم رفض الطلب من التاجر', searching_driver:'جاري البحث عن مندوب',
-  driver_assigned:'تم تعيين مندوب', driver_arrived:'المندوب وصل للمتجر', picked_up:'تم استلام الطلب',
+  merchant_rejected:'تم رفض الطلب من التاجر', searching_driver:'جاري البحث عن كابتن',
+  driver_assigned:'تم تعيين كابتن', driver_arrived:'الكابتن وصل للمتجر', picked_up:'تم استلام الطلب',
   on_the_way:'في الطريق إليك', delivered:'تم التسليم'};
 export const SC = {new:'sb sb-new',accepted:'sb sb-accepted',preparing:'sb sb-preparing',ready:'sb sb-ready',delivering:'sb sb-delivering',done:'sb sb-done',cancelled:'sb sb-cancelled',
   created:'sb sb-new', waiting_merchant:'sb sb-new', merchant_accepted:'sb sb-accepted',
@@ -84,7 +84,7 @@ export const STEP_LABELS = ['جديد','تم القبول','جاري التحض�
 export const NEW_STEPS = ['waiting_merchant','merchant_accepted','searching_driver','driver_assigned','driver_arrived','picked_up','on_the_way','delivered'];
 export const NEW_STEP_ICON_NAMES = ['clock','store','search','bike','map-pin','package','bike','check-circle'];
 export const NEW_STEP_ICONS = NEW_STEP_ICON_NAMES.map(n => icon(n, 14));
-export const NEW_STEP_LABELS = ['بانتظار التاجر','تم قبول التاجر','بحث عن مندوب','تم تعيين مندوب','وصل المندوب','تم الاستلام','في الطريق','تم التسليم'];
+export const NEW_STEP_LABELS = ['بانتظار التاجر','تم قبول التاجر','بحث عن كابتن','تم تعيين كابتن','وصل الكابتن','تم الاستلام','في الطريق','تم التسليم'];
 // تطبيع حالة أي طلب قديم لأقرب حالة في النظام الجديد (لأغراض العرض فقط، مفيش أي تعديل على البيانات المخزنة)
 const LEGACY_STATUS_MAP = {new:'waiting_merchant',accepted:'merchant_accepted',preparing:'searching_driver',ready:'driver_assigned',delivering:'on_the_way',done:'delivered',cancelled:'cancelled'};
 export function normalizeStatus(status) { return LEGACY_STATUS_MAP[status] || status; }
@@ -166,6 +166,19 @@ export function openWA(num,name){window.open('https://wa.me/'+num+'?text=أهل�
 export function callCurrentStore(){ if(!window.currentStorePhone){showToast('رقم المتجر غير متاح','err');return;} callStore(window.currentStorePhone); }
 export function waCurrentStore(){ if(!window.currentStorePhone){showToast('رقم المتجر غير متاح','err');return;} openWA(window.currentStorePhone, window.currentStoreName||'المتجر'); }
 export function closeModal(id){document.getElementById(id).classList.remove('open');}
+// P14.1 (البند 3 - Phone Validation): فحص موحّد لرقم هاتف العميل - نفس حقل schema الموجود
+// بالفعل (users/{uid}.phone)، صفر schema جديد. فحص مرن (يقبل +20/0020/0 بادئة، مسافات/شرطات)
+// بدل Regex صارم ممكن يرفض رقم مصري صحيح بالغلط. مستخدمة من customer.js (وقت الحفظ) ومن
+// orders.js (وقت إتمام الطلب - البند 4) - مكانها هنا عشان الملفين التنين أصلاً بيستوردوا من
+// utils.js بدون أي مخاطرة Circular Import جديدة.
+export function isValidPhone(phone) {
+  const p = (phone || '').trim();
+  if (!p) return false;
+  const digits = p.replace(/[\s-]/g, '');
+  if (!/^\+?\d+$/.test(digits)) return false;
+  const numDigits = digits.replace(/^\+/, '').length;
+  return numDigits >= 8 && numDigits <= 15;
+}
 export function openNotifs(){document.getElementById('notif-overlay').classList.add('open');}
 
 export function filterProds(cat, btn) {

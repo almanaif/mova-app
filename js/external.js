@@ -183,10 +183,21 @@ export function retryExternalDispatch() {
 }
 
 // ===== Driver: قبول/رفض العرض (نفس نمط Transaction في acceptRideOffer/rejectRideOffer) =====
+// جديد (P14.3.1 - Item 15 Audit): تأكيد صريح - "customerPhone" لـ external_purchases مش
+// مقروءة من أي مكان في الكود كله (index.html ولا أي ملف js آخر) - صفر UI بيعرضها، صفر caller
+// بيعتمد عليها. يعني حذفها من الـ Transaction (P14.3) ما كسرش أي behavior فعلي مستهلك - كانت
+// أصلاً feature غير مكتملة/معطوبة بالكامل (بتفشل الـ Transaction كلها بدون try/catch) قبل
+// P14.3. باقية Deferred (محتاجة معالجة مخصصة زي P14.2 بس لـ external_purchases - خارج نطاق
+// P14.3.1 عمدًا).
+// جديد (P14.3.1 - Atomicity Restored): activeExternalPurchaseId رجع يتحط جوه نفس الـ
+// Transaction (زي ما كان قبل P14.3) - firestore.rules دلوقتي بتستخدم getAfter() بدل get()
+// للتحقق من external_purchases/{id}.driverId (نفس المصدر والتفاصيل الموجودة في تعليق
+// acceptOrderAsDriver بـ orders.js).
 export async function acceptExternalOffer() {
   if (!window.CU || !window.currentEpOfferId) return;
   const purchaseId = window.currentEpOfferId;
   const ref = doc(db, EXTERNAL_COLLECTION, purchaseId);
+  const driverRef = doc(db, 'users', window.CU.uid);
   try {
     await runTransaction(db, async (t) => {
       const snap = await t.get(ref);
@@ -195,15 +206,10 @@ export async function acceptExternalOffer() {
       if (ep.status !== EP_STATUS.DRIVER_OFFERED) throw new Error('already-handled');
       if (ep.driverId) throw new Error('already-assigned');
       if (!(ep.candidateDriverIds || []).includes(window.CU.uid)) throw new Error('not-candidate');
-      const driverRef = doc(db, 'users', window.CU.uid);
       const drvSnap = await t.get(driverRef);
       if (drvSnap.data()?.activeRideId || drvSnap.data()?.activeOrderId || drvSnap.data()?.activeExternalPurchaseId) throw new Error('busy');
-      // Closure Audit Fix (#3 - Customer Phone Privacy): نفس نمط orders.js بالحرف - رقم العميل
-      // بيتحط جوه الطلب بس لحظة تعيين الكابتن، مش قبلها (مندوب مرشح لسه مش متعيّن ميقدرش يشوفه).
-      const custSnap = await t.get(doc(db, 'users', ep.customerId));
-      const customerPhone = custSnap.data()?.phone || '';
       t.update(ref, {
-        status: EP_STATUS.DRIVER_ASSIGNED, driverId: window.CU.uid, customerPhone, updatedAt: serverTimestamp(),
+        status: EP_STATUS.DRIVER_ASSIGNED, driverId: window.CU.uid, updatedAt: serverTimestamp(),
         dispatchLog: trimLog(ep.dispatchLog, { event: 'driver_accepted', driverId: window.CU.uid, at: Date.now() }),
       });
       t.update(driverRef, { activeExternalPurchaseId: purchaseId });

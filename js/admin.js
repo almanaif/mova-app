@@ -61,6 +61,7 @@ export let adminOrdersUnsub = null, adminUsersUnsub = null;
 export async function loadAdminData() {
   if (adminOrdersUnsub) return;
   loadPricingSettingsUI();
+  loadCommissionUI();
   adminOrdersUnsub = onSnapshot(collection(db,'orders'), snap => {
     const today=new Date().toDateString();let tO=0,tR=0,allR=0,allC=0,allDrvPay=0;
     snap.forEach(d=>{const o=d.data();const dt=o.createdAt?.toDate?o.createdAt.toDate():new Date();allR+=o.total||0;allC+=o.commission||0;allDrvPay+=o.driverFee||0;if(dt.toDateString()===today){tO++;tR+=o.total||0;}});
@@ -97,7 +98,7 @@ export async function loadAdminData() {
     const tMerch=document.getElementById('adm-t-merch'); if(tMerch) tMerch.textContent=allStores.length;
     let pd='';
     pendDrvs.forEach(u=>{pd+=`<div class="drv-row2"><div class="drv-av2">${icon('user',18)}</div><div class="drv-info2"><strong>${esc(u.fullName||u.name)||'--'}</strong><small style="display:inline-flex;align-items:center;gap:3px">${icon('phone',11)} ${esc(u.phone)||'--'}</small><br><span class="status status--pending">${icon('clock',11)} بانتظار الموافقة</span></div><div class="drv-row2-acts"><button class="mb2 mb-view" onclick="openDrvModal('${u.id}')">تفاصيل</button></div></div>`;});
-    document.getElementById('adm-pend-drvs').innerHTML=pd||'<div class="empty-state" style="padding:14px"><p style="font-size:12px">لا يوجد مناديب معلّقون</p></div>';
+    document.getElementById('adm-pend-drvs').innerHTML=pd||'<div class="empty-state" style="padding:14px"><p style="font-size:12px">لا يوجد كباتن بانتظار الموافقة</p></div>';
     const pendC=document.getElementById('adm-pend-c'); if(pendC) pendC.textContent=pendDrvs.length;
     const storesC=document.getElementById('adm-stores-c'); if(storesC) storesC.textContent=allStores.length;
     // جديد (Final Targeted Review - البند 6): اتشالت الكتابة على adm-notif-c من هنا - كانت
@@ -132,11 +133,22 @@ function startDriversListener() {
     onPage(docs, meta) {
       const rows = docs.map(d => {
         const u = { ...d.data(), id: d.id };
-        return `<div class="drv-row2" data-st="${u.status||'active'}"><div class="drv-av2">${icon('user',18)}</div><div class="drv-info2"><strong>${esc(u.fullName||u.name)||'--'}</strong><small style="display:inline-flex;align-items:center;gap:3px">${icon('phone',11)} ${esc(u.phone)||'--'} | ${u.status==='pending'?icon('clock',11)+' انتظار':icon('check-circle',11)+' نشط'}</small></div><div class="drv-row2-acts">${u.status==='pending'?`<button class="mb2 mb-view" onclick="openDrvModal('${u.id}')">${icon('file-text',12)} مراجعة المستندات</button>`:`<button class="mb2 mb-view" onclick="openDrvModal('${u.id}')">ملفه</button>`}</div></div>`;
+        const statusLbl = u.status==='pending' ? icon('clock',11)+' انتظار'
+          : u.status==='paused' ? icon('pause',11)+' متوقف'
+          : u.status==='deleted' ? icon('trash',11)+' محذوف'
+          : icon('check-circle',11)+' نشط';
+        const actBtns = u.status==='pending'
+          ? `<button class="mb2 mb-view" onclick="openDrvModal('${u.id}')">${icon('file-text',12)} مراجعة المستندات</button>`
+          : u.status==='deleted'
+          ? `<button class="mb2 mb-view" onclick="openDrvModal('${u.id}')">ملف الكابتن</button>`
+          : u.status==='paused'
+          ? `<button class="mb2 mb-view" onclick="openDrvModal('${u.id}')">ملف الكابتن</button><button class="mb2 mb-acc" onclick="admDrvActivate('${u.id}')">${icon('check-circle',12)} تفعيل</button>`
+          : `<button class="mb2 mb-view" onclick="openDrvModal('${u.id}')">ملف الكابتن</button><button class="mb2 mb-rej" onclick="admDrvPause('${u.id}')">${icon('pause',12)} إيقاف</button>`;
+        return `<div class="drv-row2" data-st="${u.status||'active'}"><div class="drv-av2">${icon('user',18)}</div><div class="drv-info2"><strong>${esc(u.fullName||u.name)||'--'}</strong><small style="display:inline-flex;align-items:center;gap:3px">${icon('phone',11)} ${esc(u.phone)||'--'} | ${statusLbl}</small></div><div class="drv-row2-acts">${actBtns}</div></div>`;
       });
       allRows = meta.isFirstPage ? rows : allRows.concat(rows);
       const el = document.getElementById('adm-drvs-list');
-      if (el) el.innerHTML = allRows.length ? allRows.join('') : '<div class="empty-state" style="padding:14px"><p style="font-size:12px">لا يوجد مناديب</p></div>';
+      if (el) el.innerHTML = allRows.length ? allRows.join('') : '<div class="empty-state" style="padding:14px"><p style="font-size:12px">لا يوجد كباتن</p></div>';
       const moreBtn = document.getElementById('adm-drvs-more'); if (moreBtn) moreBtn.style.display = meta.hasMore ? 'block' : 'none';
     },
   });
@@ -197,7 +209,7 @@ async function renderOneMerchantRow(m) {
     : `<span class="status status--danger">${icon('x-circle',11)} مرفوض</span>`;
   const actionBtns = m.status==='pending'
     ? `<button class="mb2 mb-acc" onclick="admAccStore('${m.id}')">قبول</button><button class="mb2 mb-rej" onclick="admRejStore('${m.id}')">رفض</button>`
-    : `<button class="mb2 mb-view" onclick="openStoreManage('${m.id}')">إدارة</button>${m.status==='active'?`<button class="mb2 mb-rej" onclick="smQuickPause('${m.id}')">إيقاف</button>`:m.status==='paused'?`<button class="mb2 mb-acc" onclick="smQuickActivate('${m.id}')">تفعيل</button>`:''}`;
+    : `<button class="mb2 mb-view" onclick="openStoreManage('${m.id}')">إدارة</button>${m.status==='active'?`<button class="mb2 mb-rej" onclick="smQuickPause('${m.id}')">إيقاف</button><button class="mb2 mb-rej" onclick="smQuickDelete('${m.id}')">حذف</button>`:m.status==='paused'?`<button class="mb2 mb-acc" onclick="smQuickActivate('${m.id}')">تفعيل</button><button class="mb2 mb-rej" onclick="smQuickDelete('${m.id}')">حذف</button>`:''}`;
   return `<div class="drv-row2"><div class="drv-av2" style="background:#EFF6FF">${icon('store',18)}</div><div class="drv-info2"><strong>${mName}</strong><small style="display:inline-flex;align-items:center;gap:3px">${icon('phone',11)} ${esc(m.storePhone||m.phone)||'--'} | ${statusBadge}</small><br><small class="meta-row">${icon('package',11)} ${prodC} منتج • ${icon('file-text',11)} ${ordC} طلب • ${icon('star',11)} ${ratingAvg||0} (${ratingC}) • ${icon('calendar',11)} ${createdStr}</small></div><div class="drv-row2-acts">${actionBtns}</div></div>`;
 }
 
@@ -221,7 +233,7 @@ function renderRecentOrders() {
         html += `<div style="padding:9px 0;border-bottom:1px solid var(--border)">
           <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:11px;font-weight:700">#${o.id.slice(-6).toUpperCase()}</span>${orderStatusBadge(o.status)}</div>
           <div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:var(--mu);display:inline-flex;align-items:center;gap:3px">${icon('store',12)} ${esc(o.storeName)||'--'} • ${esc(o.customerName)||'عميل'}</span><span><strong>${o.total||0} ج</strong></span></div>
-          <div style="font-size:10px;color:var(--mu);margin-top:2px;display:flex;align-items:center;gap:3px;flex-wrap:wrap">${icon('bike',11)} ${esc(o.driverName)||'بدون مندوب'} • ${icon('clock',11)} ${dt?dt.toLocaleString('ar-EG'):'--'}${ut?' • آخر تحديث: '+ut.toLocaleString('ar-EG'):''}</div>
+          <div style="font-size:10px;color:var(--mu);margin-top:2px;display:flex;align-items:center;gap:3px;flex-wrap:wrap">${icon('bike',11)} ${esc(o.driverName)||'بدون كابتن'} • ${icon('clock',11)} ${dt?dt.toLocaleString('ar-EG'):'--'}${ut?' • آخر تحديث: '+ut.toLocaleString('ar-EG'):''}</div>
           ${lastHist?`<div style="font-size:10px;color:var(--mu);margin-top:2px">آخر انتقال: ${SL[lastHist.from]||lastHist.from||'--'} ← ${SL[lastHist.to]||lastHist.to}</div>`:''}
           <div style="display:flex;gap:4px;margin-top:5px;flex-wrap:wrap">
             ${validNext.map(s=>`<button class="mb2 mb-view" onclick="admUpdOrd('${o.id}','${s}')" style="font-size:9px">${SL[s]}</button>`).join('')}
@@ -278,6 +290,12 @@ export function loadMoreOrders() {
 
 // ===== AUDIT LOG =====
 export async function logAudit(action, details){
+  // جديد (P15.1): auditLog قاعدتها Admin-only في firestore.rules (allow create: if isAdmin()).
+  // الدالة دي بقت متاحة من مسارات مشتركة بيستخدمها التاجر برضه (toggleProdAvail/saveEditProd
+  // في نفس الملف - بيستخدمهم زر "تفعيل/إيقاف" و"حفظ" في شاشة منتجات التاجر الجديدة P15). من
+  // غير الفحص ده، كل نداء من حساب تاجر كان بيبعت كتابة مرفوضة بصمت (catch فاضي) - مفيش أي
+  // تغيير في الـ rules نفسها، بس بنمنع محاولة كتابة إحنا عارفين مسبقًا إنها هترفض.
+  if (window.CUD?.role !== 'admin') return;
   try{
     await addDoc(collection(db,'auditLog'),{
       adminId: window.CU?.uid||null,
@@ -345,14 +363,31 @@ export async function admUpdOrd(id,status){
     showToast(e?.message==='invalid-transition' ? 'انتقال غير مسموح لهذه الحالة' : 'حدث خطأ','err');
   }
 }
-export async function admAccDrv(uid){try{await updateDoc(doc(db,'users',uid),{status:'active',approvedAt:serverTimestamp()});await addDoc(collection(db,'notifications'),{userId:uid,title:'تم قبول حسابك',body:'تم اعتماد حسابك كمندوب توصيل، تقدر تبدأ تستقبل الطلبات الآن.',type:'or',read:false,createdAt:serverTimestamp()});logAudit('قبول مندوب');showToast('تم قبول المندوب','ok');closeModal('drv-modal');}catch(e){showToast('حدث خطأ','err');}}
+export async function admAccDrv(uid){try{await updateDoc(doc(db,'users',uid),{status:'active',approvedAt:serverTimestamp()});await addDoc(collection(db,'notifications'),{userId:uid,title:'تم قبول حسابك',body:'تم اعتماد حسابك ككابتن توصيل، تقدر تبدأ تستقبل الطلبات الآن.',type:'or',read:false,createdAt:serverTimestamp()});logAudit('قبول كابتن');showToast('تم قبول المندوب','ok');closeModal('drv-modal');}catch(e){showToast('حدث خطأ','err');}}
+// P17 (A2 - Captain Lifecycle): إيقاف/تفعيل/حذف كابتن نشط بالفعل (بعد الموافقة) - كانت موجودة
+// لصفحة "المتاجر" فقط (smQuickPause/smQuickActivate/smDeleteStore)، وده نفس المبدأ بالحرف لكن
+// على users/{uid} مباشرة (المندوب مالوش مستند منفصل زي stores). الحماية الفعلية من قبول طلبات/
+// مشاوير/عروض جديدة أثناء paused/deleted موجودة بالفعل على مستوى firestore.rules (isActiveDriver()
+// بتتأكد من status=='active' في كل نقطة قبول - orders/rides/external_purchases الثلاثة) - مفيش
+// أي تعديل هنا لقواعد الأمان، بس الأزرار دي بتتحكم في نفس حقل status اللي القواعد أصلًا بتفحصه.
+export async function admDrvPause(uid){
+  if(!confirm('هل تريد إيقاف هذا الكابتن مؤقتًا؟ لن يستقبل طلبات أو مشاوير جديدة.')) return;
+  try{ await updateDoc(doc(db,'users',uid),{status:'paused',updatedAt:serverTimestamp()}); logAudit('إيقاف كابتن', uid); showToast('تم إيقاف الكابتن','ok'); closeModal('drv-modal'); }catch(e){ showToast('حدث خطأ','err'); }
+}
+export async function admDrvActivate(uid){
+  try{ await updateDoc(doc(db,'users',uid),{status:'active',updatedAt:serverTimestamp()}); logAudit('تفعيل كابتن', uid); showToast('تم تفعيل الكابتن','ok'); closeModal('drv-modal'); }catch(e){ showToast('حدث خطأ','err'); }
+}
+export async function admDrvDelete(uid){
+  if(!confirm('هل أنت متأكد من حذف هذا الكابتن؟ لن يستطيع الدخول أو استقبال أي طلبات بعد ذلك. سجل طلباته ومشاويره السابقة لن يُحذف.')) return;
+  try{ await updateDoc(doc(db,'users',uid),{status:'deleted',updatedAt:serverTimestamp()}); logAudit('حذف كابتن', uid); showToast('تم حذف الكابتن','ok'); closeModal('drv-modal'); }catch(e){ showToast('حدث خطأ','err'); }
+}
 export function admRejDrv(uid){
-  openReasonModal('سبب رفض المندوب', ['صورة البطاقة غير واضحة','الرخصة منتهية','البيانات غير مطابقة'], async(reason)=>{
+  openReasonModal('سبب رفض الكابتن', ['صورة البطاقة غير واضحة','الرخصة منتهية','البيانات غير مطابقة'], async(reason)=>{
     try{
       await updateDoc(doc(db,'users',uid),{status:'rejected',rejectReason:reason,rejectedAt:serverTimestamp()});
-      await addDoc(collection(db,'notifications'),{userId:uid,title:'لم تتم الموافقة على حسابك',body:'للأسف لم يتم قبول طلبك كمندوب. السبب: '+reason,type:'gn',read:false,createdAt:serverTimestamp()});
-      logAudit('رفض مندوب', reason);
-      showToast('تم رفض المندوب','err');
+      await addDoc(collection(db,'notifications'),{userId:uid,title:'لم تتم الموافقة على حسابك',body:'للأسف لم يتم قبول طلبك ككابتن. السبب: '+reason,type:'gn',read:false,createdAt:serverTimestamp()});
+      logAudit('رفض كابتن', reason);
+      showToast('تم رفض الكابتن','err');
       closeModal('drv-modal');
     }catch(e){showToast('حدث خطأ','err');}
   });
@@ -386,10 +421,11 @@ export async function openDrvModal(uid){
       <div class="info-row"><span class="il">الهاتف</span><span class="iv">${esc(u.phone)||'--'}</span></div>
       <div class="info-row"><span class="il">العنوان</span><span class="iv">${esc(u.address)||'--'}</span></div>
       <div class="info-row"><span class="il">تاريخ التسجيل</span><span class="iv">${createdStr}</span></div>
-      <div class="info-row"><span class="il">الحالة</span><span class="iv">${u.status==='pending'?`<span class="status status--pending">${icon('clock',12)} بانتظار الموافقة</span>`:u.status==='active'?`<span class="status status--success">${icon('check-circle',12)} نشط</span>`:`<span class="status status--danger">${icon('x-circle',12)} مرفوض</span>`}</span></div>
+      <div class="info-row"><span class="il">الحالة</span><span class="iv">${u.status==='pending'?`<span class="status status--pending">${icon('clock',12)} بانتظار الموافقة</span>`:u.status==='active'?`<span class="status status--success">${icon('check-circle',12)} نشط</span>`:u.status==='paused'?`<span class="status status--pending">${icon('pause',12)} متوقف</span>`:u.status==='deleted'?`<span class="status status--danger">${icon('trash',12)} محذوف</span>`:`<span class="status status--danger">${icon('x-circle',12)} مرفوض</span>`}</span></div>
       ${u.status==='rejected'&&u.rejectReason?`<div class="info-row"><span class="il">سبب الرفض</span><span class="iv" style="color:var(--danger)">${esc(u.rejectReason)}</span></div>`:''}
       <div style="margin:10px 0"><div style="font-size:11px;font-weight:700;color:var(--mu);margin-bottom:6px;display:flex;align-items:center;gap:4px">${icon('file-text',13)} المستندات (اضغط للتكبير):</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">${docsHtml}</div></div>`;
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">${docsHtml}</div></div>
+      ${u.status==='active'||u.status==='paused'?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">${u.status==='active'?`<button class="mb2 mb-rej" onclick="admDrvPause('${uid}')">${icon('pause',13)} إيقاف الكابتن</button>`:`<button class="mb2 mb-acc" onclick="admDrvActivate('${uid}')">${icon('check-circle',13)} تفعيل الكابتن</button>`}<button class="mb2 mb-rej" onclick="admDrvDelete('${uid}')">${icon('trash',13)} حذف الكابتن</button></div>`:''}`;
     const accBtn=document.getElementById('acc-btn'), rejBtn=document.getElementById('rej-btn');
     accBtn.style.display = u.status==='pending'?'block':'none';
     rejBtn.style.display = u.status==='pending'?'block':'none';
@@ -427,7 +463,7 @@ export async function renderAdminStoresList(allStores){
       : `<span class="status status--danger">${icon('x-circle',11)} مرفوض</span>`;
     const actionBtns = m.status==='pending'
       ? `<button class="mb2 mb-acc" onclick="admAccStore('${m.id}')">قبول</button><button class="mb2 mb-rej" onclick="admRejStore('${m.id}')">رفض</button>`
-      : `<button class="mb2 mb-view" onclick="openStoreManage('${m.id}')">إدارة</button>${m.status==='active'?`<button class="mb2 mb-rej" onclick="smQuickPause('${m.id}')">إيقاف</button>`:m.status==='paused'?`<button class="mb2 mb-acc" onclick="smQuickActivate('${m.id}')">تفعيل</button>`:''}`;
+      : `<button class="mb2 mb-view" onclick="openStoreManage('${m.id}')">إدارة</button>${m.status==='active'?`<button class="mb2 mb-rej" onclick="smQuickPause('${m.id}')">إيقاف</button><button class="mb2 mb-rej" onclick="smQuickDelete('${m.id}')">حذف</button>`:m.status==='paused'?`<button class="mb2 mb-acc" onclick="smQuickActivate('${m.id}')">تفعيل</button><button class="mb2 mb-rej" onclick="smQuickDelete('${m.id}')">حذف</button>`:''}`;
     return `<div class="drv-row2"><div class="drv-av2" style="background:#EFF6FF">${icon('store',18)}</div><div class="drv-info2"><strong>${mName}</strong><small style="display:inline-flex;align-items:center;gap:3px">${icon('phone',11)} ${esc(m.storePhone||m.phone)||'--'} | ${statusBadge}</small><br><small class="meta-row">${icon('package',11)} ${prodC} منتج • ${icon('file-text',11)} ${ordC} طلب • ${icon('star',11)} ${ratingAvg||0} (${ratingC}) • ${icon('calendar',11)} ${createdStr}</small></div><div class="drv-row2-acts">${actionBtns}</div></div>`;
   }));
   document.getElementById('adm-stores-list').innerHTML = rows.join('');
@@ -438,6 +474,10 @@ export async function smQuickPause(uid){
 }
 export async function smQuickActivate(uid){
   try{ await updateDoc(doc(db,'stores',uid),{status:'active',updatedAt:serverTimestamp()}); await updateDoc(doc(db,'users',uid),{status:'active'}).catch(()=>{}); logAudit('تفعيل متجر'); showToast('تم التفعيل','ok'); }catch(e){showToast('حدث خطأ','err');}
+}
+export async function smQuickDelete(uid){
+  if(!confirm('هل أنت متأكد من حذف هذا المتجر؟ لا يمكن التراجع عن هذا الإجراء. سجل طلباته المالي لن يُحذف.')) return;
+  try{ await updateDoc(doc(db,'stores',uid),{status:'deleted',updatedAt:serverTimestamp()}); await updateDoc(doc(db,'users',uid),{status:'deleted'}).catch(()=>{}); logAudit('حذف متجر', uid); showToast('تم حذف المتجر','ok'); }catch(e){showToast('حدث خطأ','err');}
 }
 export async function openStoreManage(uid){
   window.smCurrentStore = uid;
@@ -656,17 +696,58 @@ export function admNav(page,el){
   // جديد (Final Targeted Review - البند 1): طلبات انضمام التجار + الطلبات الحرة، نفس نمط عمر الشاشة
   if (page==='requests') { startIncomingRequestsListeners(); } else { stopIncomingRequestsListeners(); }
 }
+// ===== P17 (C) — تحميل العمولة الحقيقية من Firestore عند فتح لوحة الأدمن =====
+// السبب الجذري للمشكلة: saveComm() كانت بتحدّث adm-comm-r/comm-val بس بعد حفظ ناجح في نفس
+// الجلسة - أي تحميل جديد للوحة (بعد Logout/Login أو Refresh) كان بيرجّع لهم لقيمة "10" الثابتة
+// في الـHTML الأصلي، حتى لو القيمة الحقيقية في settings/commission مختلفة (listenSettings() في
+// orders.js كانت بتحدّث window.commRate بشكل حي وصحيح، لكن محدش كان بيعكس القيمة دي على عناصر
+// واجهة "مالي" نفسها). نفس نمط loadPricingSettingsUI() بالحرف: قراءة مباشرة من Firestore عند
+// فتح اللوحة، صفر setTimeout، صفر اعتماد على Refresh.
+let commissionUiLoaded = false;
+export async function loadCommissionUI() {
+  if (commissionUiLoaded) return;
+  commissionUiLoaded = true;
+  try {
+    const snap = await getDoc(doc(db, 'settings', 'commission'));
+    const rate = (snap.exists() && typeof snap.data().rate === 'number') ? snap.data().rate : 10;
+    document.getElementById('adm-comm-r').textContent = rate + '%';
+    document.getElementById('comm-val').value = rate;
+    // P17 (D4): externalRate كانت حقل مستقل غير موثّق في نفس المستند، بفولباك مخفي (|| 10) جوه
+    // external.js - هنا بنعرضها صراحة بدل ما تفضل مخفية (راجع saveExternalCommission تحت).
+    const extRate = (snap.exists() && typeof snap.data().externalRate === 'number') ? snap.data().externalRate : 10;
+    const extEl = document.getElementById('comm-ext-val');
+    if (extEl) extEl.value = extRate;
+    const extDisp = document.getElementById('adm-comm-ext-r');
+    if (extDisp) extDisp.textContent = extRate + '%';
+  } catch (e) {
+    // فشل القراءة مايكسرش لوحة الأدمن - يفضل الافتراضي الظاهر في الـHTML
+  }
+}
 export async function saveComm(){
   const v=parseInt(document.getElementById('comm-val').value)||10;
   try{
-    await setDoc(doc(db,'settings','commission'),{rate:v,updatedAt:serverTimestamp()});
+    await setDoc(doc(db,'settings','commission'),{rate:v,updatedAt:serverTimestamp()},{merge:true});
     // مانحدّثش window.commRate يدوي هنا - هيتحدّث لوحده من خلال listenSettings() لما التغيير يوصل
     document.getElementById('adm-comm-r').textContent=v+'%';
+    logAudit('تعديل العمولة', v+'%');
     showToast('تم تحديث العمولة إلى '+v+'%','ok');
+  }catch(e){ showToast('حدث خطأ في حفظ العمولة','err'); }
+}
+// P17 (D4): عمولة "اطلب أي حاجة" - حقل مستقل (externalRate) بدل الفولباك المخفي.
+export async function saveExternalCommission(){
+  const v=parseInt(document.getElementById('comm-ext-val').value)||10;
+  try{
+    await setDoc(doc(db,'settings','commission'),{externalRate:v,updatedAt:serverTimestamp()},{merge:true});
+    const disp = document.getElementById('adm-comm-ext-r'); if (disp) disp.textContent = v+'%';
+    logAudit('تعديل عمولة اطلب أي حاجة', v+'%');
+    showToast('تم تحديث عمولة "اطلب أي حاجة" إلى '+v+'%','ok');
   }catch(e){ showToast('حدث خطأ في حفظ العمولة','err'); }
 }
 
 // ===== جديد (Ride Service Integration Plan - الخطوة 2/3): إعدادات تسعير التوصيل =====
+// P17 (D2/D3): نفس قراءة getPricingConfig() الواحدة دي بقت بتملأ 3 أقسام (توصيل/مشاوير/اطلب أي
+// حاجة) بدل قسم واحد بس - صفر قراءة Firestore إضافية، نفس نمط الحماية (pricingUiLoaded) والـ
+// try/catch الأصلي.
 let pricingUiLoaded = false;
 export async function loadPricingSettingsUI() {
   if (pricingUiLoaded) return;
@@ -679,6 +760,14 @@ export async function loadPricingSettingsUI() {
     document.getElementById('pr-del-min').value = d.minimumFare ?? '';
     document.getElementById('pr-del-fee').value = d.bookingFee ?? 0;
     document.getElementById('pr-version').textContent = cfg.pricingVersion || '--';
+    const r = cfg.ride || {};
+    const rideEls = { 'pr-ride-base':r.baseFare??'', 'pr-ride-perkm':r.perKmRate??0, 'pr-ride-min':r.minimumFare??'', 'pr-ride-fee':r.bookingFee??0, 'pr-ride-maxdist':r.maxDistanceKm??'' };
+    Object.entries(rideEls).forEach(([id,val]) => { const el=document.getElementById(id); if (el) el.value = val; });
+    const ep = cfg.external_purchase || {};
+    const epEls = { 'pr-ep-base':ep.baseFare??'', 'pr-ep-perkm':ep.perKmRate??0, 'pr-ep-min':ep.minimumFare??'', 'pr-ep-fee':ep.bookingFee??0 };
+    Object.entries(epEls).forEach(([id,val]) => { const el=document.getElementById(id); if (el) el.value = val; });
+    const rideVerEl = document.getElementById('pr-ride-version'); if (rideVerEl) rideVerEl.textContent = cfg.pricingVersion || '--';
+    const epVerEl = document.getElementById('pr-ep-version'); if (epVerEl) epVerEl.textContent = cfg.pricingVersion || '--';
   } catch (e) {
     document.getElementById('pr-version').textContent = 'غير مُعدّة بعد - احفظ أول مرة عشان تفعّل التوصيل';
   }
@@ -698,9 +787,52 @@ export async function savePricingSettings() {
     // فلو مش موجودة بتفضل مش موجودة لحد ما مرحلة Ride Service تحطها فعليًا.
     const newVersion = await savePricingConfig(null, deliveryCfg);
     document.getElementById('pr-version').textContent = newVersion;
+    const rideVerEl = document.getElementById('pr-ride-version'); if (rideVerEl) rideVerEl.textContent = newVersion;
+    const epVerEl = document.getElementById('pr-ep-version'); if (epVerEl) epVerEl.textContent = newVersion;
     logAudit('تحديث إعدادات تسعير التوصيل', `Base:${baseFare} Min:${minimumFare} v${newVersion}`);
     showToast('تم تحديث إعدادات التسعير', 'ok');
   } catch (e) { showToast('حدث خطأ في حفظ التسعير', 'err'); console.error('[savePricingSettings]', e); }
+}
+// P17 (D2): تسعير المشاوير - نفس بنية التوصيل بالحرف + maxDistanceKm الإضافي.
+export async function saveRidePricingSettings() {
+  const baseFare = parseFloat(document.getElementById('pr-ride-base').value);
+  const minimumFare = parseFloat(document.getElementById('pr-ride-min').value);
+  const perKmRate = parseFloat(document.getElementById('pr-ride-perkm').value) || 0;
+  const bookingFee = parseFloat(document.getElementById('pr-ride-fee').value) || 0;
+  const maxDistanceKm = parseFloat(document.getElementById('pr-ride-maxdist').value) || 0;
+  if (isNaN(baseFare) || isNaN(minimumFare)) { showToast('يرجى تعبئة السعر الأساسي والحد الأدنى', 'err'); return; }
+  if (baseFare < 0 || minimumFare < 0 || perKmRate < 0 || bookingFee < 0 || maxDistanceKm < 0) {
+    showToast('القيم لازم تكون صفر أو أكبر، مش سالبة', 'err'); return;
+  }
+  const rideCfg = { baseFare, perKmRate, minimumFare, bookingFee, maxDistanceKm };
+  try {
+    const newVersion = await savePricingConfig(rideCfg, null);
+    const verEl = document.getElementById('pr-ride-version'); if (verEl) verEl.textContent = newVersion;
+    document.getElementById('pr-version').textContent = newVersion;
+    const epVerEl = document.getElementById('pr-ep-version'); if (epVerEl) epVerEl.textContent = newVersion;
+    logAudit('تحديث إعدادات تسعير المشاوير', `Base:${baseFare} Min:${minimumFare} v${newVersion}`);
+    showToast('تم تحديث تسعير المشاوير', 'ok');
+  } catch (e) { showToast('حدث خطأ في حفظ التسعير', 'err'); console.error('[saveRidePricingSettings]', e); }
+}
+// P17 (D3): تسعير "اطلب أي حاجة" - نفس بنية التوصيل، بدون maxDistanceKm (مش مستخدمة هنا).
+export async function saveExternalPricingSettings() {
+  const baseFare = parseFloat(document.getElementById('pr-ep-base').value);
+  const minimumFare = parseFloat(document.getElementById('pr-ep-min').value);
+  const perKmRate = parseFloat(document.getElementById('pr-ep-perkm').value) || 0;
+  const bookingFee = parseFloat(document.getElementById('pr-ep-fee').value) || 0;
+  if (isNaN(baseFare) || isNaN(minimumFare)) { showToast('يرجى تعبئة السعر الأساسي والحد الأدنى', 'err'); return; }
+  if (baseFare < 0 || minimumFare < 0 || perKmRate < 0 || bookingFee < 0) {
+    showToast('القيم لازم تكون صفر أو أكبر، مش سالبة', 'err'); return;
+  }
+  const epCfg = { baseFare, perKmRate, minimumFare, bookingFee };
+  try {
+    const newVersion = await savePricingConfig(null, null, epCfg);
+    const verEl = document.getElementById('pr-ep-version'); if (verEl) verEl.textContent = newVersion;
+    document.getElementById('pr-version').textContent = newVersion;
+    const rideVerEl = document.getElementById('pr-ride-version'); if (rideVerEl) rideVerEl.textContent = newVersion;
+    logAudit('تحديث إعدادات تسعير اطلب أي حاجة', `Base:${baseFare} Min:${minimumFare} v${newVersion}`);
+    showToast('تم تحديث تسعير "اطلب أي حاجة"', 'ok');
+  } catch (e) { showToast('حدث خطأ في حفظ التسعير', 'err'); console.error('[saveExternalPricingSettings]', e); }
 }
 
 
@@ -881,5 +1013,9 @@ export function registerAdminResets() {
   recentOrdersPager = null; allOrdsPager = null; drvsPager = null; storesPager = null;
   if (adminRidesUnsub) { try { adminRidesUnsub(); } catch(e) {} adminRidesUnsub = null; }
   admMapDrivers = []; admMapRides = [];
+  // P17.1: بدون ده، لوحة "مالي" (العمولة + الأسعار الثلاثة) كانت بتفضل عارضة آخر قيمة
+  // اتحمّلت في الجلسة السابقة بدل ما تعمل getDoc جديد فعلي من Firestore - لأن doLogout() مش
+  // بيعمل Reload كامل للصفحة (SPA)، فمتغيرات الموديول زي دول كانت عايشة عبر Logout→Login.
+  commissionUiLoaded = false; pricingUiLoaded = false;
   });
 }

@@ -48,14 +48,17 @@ export async function previewFare(serviceType, params = {}) {
 }
 
 // ===== لوحة الإدارة: تحديث الإعدادات + ترقيم الإصدار تلقائيًا (القرار 6) =====
-export async function savePricingConfig(newRideCfg, newDeliveryCfg) {
+// P17 (D3): third optional param لتسعير "اطلب أي حاجة" (external_purchase) - بنفس أسلوب
+// ride/delivery بالحرف (merge:true، صفر قيم افتراضية Hardcoded، نفس ترقيم pricingVersion).
+export async function savePricingConfig(newRideCfg, newDeliveryCfg, newExternalCfg) {
   const current = await getDoc(doc(db, 'settings', 'pricing'));
   const nextVersion = (current.exists() ? (current.data().pricingVersion || 1) : 0) + 1;
   const payload = { pricingVersion: nextVersion, updatedAt: serverTimestamp() };
   if (newRideCfg) payload.ride = newRideCfg;
   if (newDeliveryCfg) payload.delivery = newDeliveryCfg;
-  // merge:true عشان لو عدّلنا التوصيل بس، إعدادات المشاوير (لو مش موجودة أو لسه ما اتحطتش)
-  // متتمسحش ومحتاجش تتحط بقيمة افتراضية Hardcoded عشان نحميها.
+  if (newExternalCfg) payload.external_purchase = newExternalCfg;
+  // merge:true عشان لو عدّلنا خدمة واحدة بس، إعدادات باقي الخدمات (لو مش موجودة أو لسه ما
+  // اتحطتش) متتمسحش ومحتاجش تتحط بقيمة افتراضية Hardcoded عشان نحميها.
   await setDoc(doc(db, 'settings', 'pricing'), payload, { merge: true });
   return nextVersion;
 }

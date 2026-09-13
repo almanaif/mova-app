@@ -69,7 +69,7 @@ export function switchTab(t) {
   updateEntryLabel(t);
 }
 
-export const ENTRY_LABELS = {customer:{icon:'👤',name:'عميل'},driver:{icon:'🛵',name:'مندوب'},merchant:{icon:'🏪',name:'تاجر'},admin:{icon:'⚙️',name:'إدارة'}};
+export const ENTRY_LABELS = {customer:{icon:'👤',name:'عميل'},driver:{icon:'🛵',name:'كابتن'},merchant:{icon:'🏪',name:'تاجر'},admin:{icon:'⚙️',name:'إدارة'}};
 export function updateEntryLabel(tab) {
   const cfg = ENTRY_LABELS[window.selectedType] || ENTRY_LABELS.customer;
   document.getElementById('entry-type-icon').textContent = cfg.icon;
@@ -137,8 +137,13 @@ export async function doRegister() {
   if (role === 'customer') {
     const name = document.getElementById('rname')?.value?.trim();
     email = document.getElementById('rmail')?.value?.trim();
-    const phone = document.getElementById('rphone')?.value?.trim();
-    const address = document.getElementById('raddress')?.value?.trim();
+    // P14 (Customer Registration Simplification): حقلي رقم التليفون والعنوان اتشالوا من شاشة
+    // التسجيل نفسها (index.html) - بيتم إكمالهم لاحقًا من "حسابي". || '' هنا ضرورية: من غير
+    // كده document.getElementById() هترجع null (العنصر مش موجود خالص دلوقتي) و phone/address
+    // هيبقوا undefined - و Firestore setDoc بيرفض أي قيمة undefined فعليًا (مفيش
+    // ignoreUndefinedProperties في تهيئة firebase.js)، يعني التسجيل كله كان هيفشل بالكامل.
+    const phone = document.getElementById('rphone')?.value?.trim() || '';
+    const address = document.getElementById('raddress')?.value?.trim() || '';
     pass = document.getElementById('rpass')?.value;
     if (!name||!email||!pass) { showErr('يرجى تعبئة الاسم والبريد وكلمة المرور'); authLockEnd(); return; }
     data = { name, email, phone, address, role, points:0, status:'active', createdAt:serverTimestamp() };

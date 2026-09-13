@@ -7,7 +7,7 @@
 import { DEFAULT_LOC, STORE_LOC } from './firebase.js';
 import { onListenersCleared, showToast } from './utils.js';
 import { decodePolyline, getRoute, reverseGeocode, searchPlaces, searchPOICategory, POI_CATEGORIES } from './routing.js';
-import { renderIcons } from './icons.js';
+import { icon, renderIcons } from './icons.js';
 // P1 (توحيد المسافات - Maps & Tracking Hardening): _distMeters هي نفس دالة driver.js/rides.js
 // الموحّدة (Haversine دقيقة). بنستوردها من geo-utils.js (موديول صفر Imports) مش من driver.js
 // مباشرة - جرّبنا الاستيراد المباشر من driver.js الأول، لكن ثبت عمليًا (باختبار تحميل شجرة
@@ -792,38 +792,20 @@ let drvSelfMarker = null;
 let drvPickupMarker = null;
 let driverMapRideData = null; // لو موجودة، يبقى فيه مشوار جاري - نستخدمها وقت إنشاء الخريطة لو اتفتحت أثناء مشوار
 
-export function toggleDriverMap() {
-  const sec = document.getElementById('drv-map-sec');
-  if (!sec) return;
-  // إصلاح (Map Upgrade Sprint - المشكلة رقم 1): زرار "خريطة" في الشريط السفلي كان مش بينده
-  // drvNav() زي باقي الأزرار، فلو المندوب كان في تبويب "إحصائيات"/"حسابي" وقت الضغط، قسم
-  // الخريطة (#drv-map-sec) كان بيتفتح فعليًا (display:block) لكن جوه #drv-home-tab اللي هو نفسه
-  // مخفي (display:none) - يعني الخريطة "شغالة" بس مش ظاهرة للمستخدم خالص. هنا بنتأكد إن تبويب
-  // الرئيسية ظاهر أولًا (بنفس منطق drvNav في driver.js بالظبط، من غير ما نعدّل driver.js نفسه).
-  const homeTab = document.getElementById('drv-home-tab');
-  const homeWasHidden = homeTab && homeTab.style.display === 'none';
-  if (homeWasHidden) {
-    document.querySelectorAll('#screen-driver .nav-item').forEach(n => n.classList.remove('active'));
-    homeTab.style.display = 'block';
-    const statsTab = document.getElementById('drv-stats-tab');
-    const profTab = document.getElementById('drv-profile-tab');
-    const extra = document.getElementById('drv-extra');
-    if (statsTab) statsTab.style.display = 'none';
-    if (profTab) profTab.style.display = 'none';
-    if (extra) extra.style.display = 'grid';
-    const mapNavBtn = document.querySelector('#screen-driver .bottom-nav .nav-item:last-child');
-    if (mapNavBtn) mapNavBtn.classList.add('active');
-  }
-  const show = homeWasHidden || sec.style.display === 'none';
-  sec.style.display = show ? 'block' : 'none';
-  if (!show) return; // كان ظاهر بالفعل والمستخدم بيقفله - مفيش داعي نبني/نـresize خريطة هتتخبي
-
+// ===== P16.1 — نقطة الإنشاء الوحيدة لخريطة المندوب (Driver Map Lifecycle Unification) =====
+// دي الدالة الوحيدة في المشروع كله اللي بتعمل `new maplibregl.Map({container:'driver-map',...})`.
+// قبل كده كان في نسختين متطابقتين من نفس الكود (واحدة في showDriverMapTab، وواحدة في
+// toggleDriverMap) - سبب الازدواجية: toggleDriverMap() كانت الدالة الأصلية من تصميم P15 وما
+// قبله (خريطة كقسم داخل تبويب الرئيسية)، ولما P16 أضاف تبويب خريطة مستقل، أُضيفت showDriverMapTab()
+// كنقطة دخول جديدة بنفس منطق الإنشاء بدل تعديل toggleDriverMap() (تجنبًا لكسر أي استدعاء قديم
+// وقتها) - فبقى فيه مسارين قادرين يبنوا نفس الخريطة. الدالة دي بترجع الخريطة الموجودة لو صالحة
+// (reuse، صفر Instance مكرر) أو تبنيها لو مش موجودة - نفس الـ Guard الأصلي (if(!window.drvMap))
+// بالحرف، بس دلوقتي في مكان واحد بس.
+function ensureDriverMapReady() {
+  if (typeof maplibregl === 'undefined') { showToast('تعذر تحميل الخريطة، حاول لاحقًا', 'err'); return; }
   if (!window.drvMap) {
-    if (typeof maplibregl === 'undefined') { showToast('تعذر تحميل الخريطة، حاول لاحقًا', 'err'); return; }
     setTimeout(() => {
       try {
-        // استخدام موقع GPS الحقيقي للمندوب لو متاح فعلاً وقت فتح الخريطة، وإلا DEFAULT_LOC
-        // (المنايف - الإسماعيلية) كـ fallback - نفس المتغيرات المستخدمة بالفعل في driver.js.
         const startLoc = (typeof window.driverLat === 'number' && typeof window.driverLng === 'number')
           ? [window.driverLat, window.driverLng] : DEFAULT_LOC;
         window.drvMap = new maplibregl.Map({
@@ -848,11 +830,47 @@ export function toggleDriverMap() {
       }
     }, 100);
   } else {
-    // الخريطة كانت متبنية بالفعل بس الحاوية كانت مخفية (display:none على القسم أو التبويب) -
-    // MapLibre محتاج resize() صريح عشان يعيد حساب أبعاد الـ Canvas الصحيحة، وإلا هتفضل خريطة
-    // رمادية/فاضية أو مقصوصة لحد ما المستخدم يعمل Zoom/Pan يدوي (البند الأساسي في المشكلة رقم 1).
+    // الخريطة كانت متبنية بالفعل بس الحاوية كانت مخفية (display:none) - MapLibre محتاج resize()
+    // صريح عشان يعيد حساب أبعاد الـ Canvas الصحيحة، وإلا هتفضل خريطة رمادية/فاضية أو مقصوصة.
     setTimeout(() => { if (window.drvMap) window.drvMap.resize(); }, 60);
   }
+}
+
+export function showDriverMapTab() {
+  ensureDriverMapReady();
+}
+
+export function toggleDriverMap() {
+  const sec = document.getElementById('drv-map-sec');
+  if (!sec) return;
+  // إصلاح (Map Upgrade Sprint - المشكلة رقم 1): زرار "خريطة" في الشريط السفلي كان مش بينده
+  // drvNav() زي باقي الأزرار، فلو المندوب كان في تبويب "إحصائيات"/"حسابي" وقت الضغط، قسم
+  // الخريطة (#drv-map-sec) كان بيتفتح فعليًا (display:block) لكن جوه #drv-home-tab اللي هو نفسه
+  // مخفي (display:none) - يعني الخريطة "شغالة" بس مش ظاهرة للمستخدم خالص. هنا بنتأكد إن تبويب
+  // الرئيسية ظاهر أولًا (بنفس منطق drvNav في driver.js بالظبط، من غير ما نعدّل driver.js نفسه).
+  // ===== P16.1 =====: #drv-map-sec/#drv-extra ذاتهم بقوا مش موجودين في DOM بعد إعادة هيكلة P16
+  // (الخريطة بقت تبويب مستقل)، فالسطر الأول فوق (`if (!sec) return;`) بيرجّع الدالة أصلاً من
+  // غير ما توصل هنا خالص طالما محدش بينده toggleDriverMap() تاني في الواجهة الحالية. الكود
+  // الأصلي اتسيب زي ما هو (Option A: صفر تعديل لسلوكها القديم لو استُخدمت تاني) - غيّرنا بس
+  // مصدر إنشاء الخريطة تحت (نفس ensureDriverMapReady المشتركة بدل نسخة مكررة من new maplibregl.Map).
+  const homeTab = document.getElementById('drv-home-tab');
+  const homeWasHidden = homeTab && homeTab.style.display === 'none';
+  if (homeWasHidden) {
+    document.querySelectorAll('#screen-driver .nav-item').forEach(n => n.classList.remove('active'));
+    homeTab.style.display = 'block';
+    const statsTab = document.getElementById('drv-stats-tab');
+    const profTab = document.getElementById('drv-profile-tab');
+    const extra = document.getElementById('drv-extra');
+    if (statsTab) statsTab.style.display = 'none';
+    if (profTab) profTab.style.display = 'none';
+    if (extra) extra.style.display = 'grid';
+    const mapNavBtn = document.querySelector('#screen-driver .bottom-nav .nav-item:last-child');
+    if (mapNavBtn) mapNavBtn.classList.add('active');
+  }
+  const show = homeWasHidden || sec.style.display === 'none';
+  sec.style.display = show ? 'block' : 'none';
+  if (!show) return; // كان ظاهر بالفعل والمستخدم بيقفله - مفيش داعي نبني/نـresize خريطة هتتخبي
+  ensureDriverMapReady();
 }
 
 // بتتنده من driver.js في كل نبضة GPS (بعد نفس منطق throttle الحالي - صفر كتابات إضافية) عشان

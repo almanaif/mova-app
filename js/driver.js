@@ -5,7 +5,7 @@ import { SL, esc, escJs, normalizeStatus, onListenersCleared, onSnapshot, orderS
 import { icon } from './icons.js';
 import { getNextRequestId } from './merchant.js';
 import { ORDER_STATUS, acceptOrderAsDriver, getDispatchQuery, transitionOrder, updateDriverLocationForOrder } from './orders.js';
-import { updateDriverSelfLocation, initDriverRegLocationMap, destroyDriverRegLocationMap } from './maps.js';
+import { updateDriverSelfLocation, initDriverRegLocationMap, destroyDriverRegLocationMap, showDriverMapTab } from './maps.js';
 import { updateDriverLocationForActiveRide, initDriverActiveRideListener, isDriverRideActive } from './rides.js';
 import { listenExternalOffers, initDriverActiveExternalListener, isDriverExternalActive } from './external.js';
 import { distMeters as _distMeters } from './geo-utils.js';
@@ -76,7 +76,7 @@ export function startGPS() {
     // "دقة ضعيفة")، وتتخزّن جوه window.driverLat/Lng وتتبعت لـ Firestore/Route Requests -
     // Firestore Rules هتردّها (lat/lng range check)، لكن أفضل نوقفها هنا الأول بدل ما نضيّع
     // Request فاشل، ونمنع كمان تخزينها في users/{uid} (مالوش نفس حماية orderDriverLocationUpdateOk).
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) return;
     // تجاهل نبضة GPS شبه عديمة الفايدة (دقة أسوأ من 500 متر) - كتابتها هتوهم العميل/الأدمن
     // بموقع غلط تمامًا للمندوب بدل ما ماتتحدثش الخريطة أصلًا لحد ما توصل نبضة أدق. لكن مفيش
     // داعي نسيب المندوب من غير أي تفسير ليه الخريطة "متجمدة" - Feedback مُهدّأ (throttled).
@@ -200,18 +200,35 @@ export function maybeStopGpsIfIdle() {
 
 
 // ===== DRIVER FUNCTIONS =====
+// P16 (§23 Case 4): لو رابط الصورة (photoURL أو docs['d-photo']) بايظ/404، الـ<img onerror> بينده
+// الدالة دي بدل ما يسيب أيقونة "صورة مكسورة" افتراضية للمتصفح - نفس Fallback Avatar المستخدم
+// أصلاً لما مفيش صورة خالص.
+export function driverAvatarFallback(imgEl, size) {
+  if (imgEl?.parentElement) imgEl.parentElement.innerHTML = icon('user', size);
+}
 export function loadDriverData() {
   const ud = window.CUD;
   if (ud) {
-    document.getElementById('drv-name').textContent = `أهلاً، ${ud.fullName||ud.name||''}`;
-    document.getElementById('drv-prof-name').textContent = ud.fullName||ud.name||'--';
-    document.getElementById('drv-prof-sub').textContent = ud.email||'--';
-    if (ud.photoURL) {
-      const av = document.getElementById('drv-av');
-      if (av) av.innerHTML = `<img src="${esc(ud.photoURL)}" alt="">`;
-      const hdrAv = document.getElementById('drv-hdr-av');
-      if (hdrAv) hdrAv.innerHTML = `<img src="${esc(ud.photoURL)}" alt="">`;
+    document.getElementById('drv-name').textContent = ud.fullName||ud.name ? `كابتن ${ud.fullName||ud.name}` : 'كابتن';
+    document.getElementById('drv-prof-name').textContent = ud.fullName||ud.name ? `كابتن ${ud.fullName||ud.name}` : '--';
+    document.getElementById('drv-prof-sub').textContent = 'كابتن توصيل';
+    // P16 (§2 - Captain Photo): نفس أولوية المصدر المطلوبة بالحرف - photoURL أولاً، وإلا
+    // docs['d-photo'] (نفس رابط الصورة الشخصية اللي بيستخدمه الأدمن بالفعل في openDrvModal
+    // لعرض مستندات المندوب - راجع admin.js docs['d-photo'])، وإلا Fallback (أيقونة افتراضية
+    // ثابتة في الـHTML، مفيش داعي نلمسها). onerror على الـ<img> يرجّع نفس الـFallback تلقائيًا
+    // لو الرابط نفسه بايظ/404 (الحالة 4 المطلوبة) بدل صورة مكسورة ظاهرة للمستخدم.
+    const photoUrl = ud.photoURL || ud.docs?.['d-photo'] || null;
+    const av = document.getElementById('drv-av');
+    const hdrAv = document.getElementById('drv-hdr-av');
+    if (photoUrl) {
+      if (av) av.innerHTML = `<img src="${esc(photoUrl)}" alt="" onerror="driverAvatarFallback(this,26)">`;
+      if (hdrAv) hdrAv.innerHTML = `<img src="${esc(photoUrl)}" alt="" onerror="driverAvatarFallback(this,20)">`;
+    } else {
+      if (av) av.innerHTML = icon('user', 26);
+      if (hdrAv) hdrAv.innerHTML = icon('user', 20);
     }
+    const emailLine = document.getElementById('drv-prof-email-line');
+    if (emailLine) { if (ud.email) { document.getElementById('drv-prof-email').textContent = ud.email; emailLine.style.display = 'flex'; } else emailLine.style.display = 'none'; }
     loadDriverRating(ud);
     const phoneLine = document.getElementById('drv-prof-phone-line');
     if (phoneLine) { if (ud.phone) { document.getElementById('drv-prof-phone').textContent = ud.phone; phoneLine.style.display = 'flex'; } else phoneLine.style.display = 'none'; }
@@ -305,12 +322,15 @@ export function loadDriverOrders() {
     // موثّق في تقرير QA). لو الطلب النشط الوحيد خلص وهو أصلًا Offline، بيوقف GPS فورًا.
     _updateHasActiveDeliveryOrder(snap);
     maybeStopGpsIfIdle();
+    renderDriverHomeActiveOrderCard();
     const list = document.getElementById('drv-ords-list');
     const today = new Date().toDateString();
     let tOrd=0, tEarn=0, wOrd=0, wEarn=0;
     const now = new Date();
     if (snap.empty) { list.innerHTML='<div class="empty-state"><div class="ei">'+icon('inbox',40)+'</div><p>لا توجد طلبات</p></div>'; return; }
-    let html = '';
+    // P16 (§11 - Orders Screen): نفس الكروت المحسوبة تحت بالظبط (صفر منطق جديد) - بس بنوزّعها
+    // على 3 مجموعات عرض حسب نفس قيمة st المحسوبة أصلاً لكل طلب، بدل قائمة واحدة مسطّحة.
+    let newHtml = '', progressHtml = '', doneHtml = '';
     snap.forEach(d => {
       const o = {...d.data(),id:d.id};
       const dt = o.createdAt?.toDate?o.createdAt.toDate():new Date();
@@ -326,7 +346,7 @@ export function loadDriverOrders() {
       else if (st === ORDER_STATUS.ON_THE_WAY) actionHtml = `<button class="mb2 mb-acc" onclick="updOrdStatus('${d.id}','${ORDER_STATUS.DELIVERED}')">سلّمت ${icon('check-circle',14)}</button>`;
       else if (st === ORDER_STATUS.WAITING_MERCHANT || st === ORDER_STATUS.MERCHANT_ACCEPTED || st === ORDER_STATUS.SEARCHING_DRIVER) actionHtml = `<span style="font-size:11px;color:var(--mu);font-weight:600;display:inline-flex;align-items:center;gap:4px">${icon('clock',13)} بانتظار تجهيز التاجر</span>`;
       else if (st === ORDER_STATUS.CANCELLED || st === ORDER_STATUS.MERCHANT_REJECTED) actionHtml = `<span style="font-size:11px;color:var(--danger);font-weight:700;display:inline-flex;align-items:center;gap:4px">${icon('x-circle',13)} الطلب ملغي</span>`;
-      html += `<div class="ord-card">
+      const cardHtml = `<div class="ord-card">
         <div class="ord-top"><span class="ord-id">#${d.id.slice(-6).toUpperCase()}</span>${orderStatusBadge(o.status)}</div>
         <div class="ord-route"><div class="ord-pt"><div class="ol">الاستلام</div><div class="ov">${esc(o.storeName)||'--'}</div></div><span class="ord-arr">${icon('arrow-left',15)}</span><div class="ord-pt"><div class="ol">التوصيل</div><div class="ov">${esc(o.customerName)||'العميل'}</div></div></div>
         ${o.customerPhone ? `<div style="display:flex;gap:8px;margin:6px 0"><button class="ha-btn ha-call" onclick="callStore('${escJs(o.customerPhone)}')">${icon('phone',14)} اتصل بالعميل</button><button class="ha-btn ha-wa" onclick="openWA('${escJs(o.customerPhone)}','${escJs(o.customerName||'العميل')}')">${icon('message-circle',14)} واتساب</button></div>` : ''}
@@ -334,8 +354,13 @@ export function loadDriverOrders() {
           <div style="display:flex;gap:5px">${actionHtml}</div>
         </div>
       </div>`;
+      if (ACTIVE_DRIVER_ORDER_STATUSES.includes(st)) progressHtml += cardHtml;
+      else if (st === ORDER_STATUS.DELIVERED || st === ORDER_STATUS.CANCELLED || st === ORDER_STATUS.MERCHANT_REJECTED) doneHtml += cardHtml;
+      else newHtml += cardHtml;
     });
-    list.innerHTML = html;
+    const section = (title, body) => body ? `<div class="sec-hdr" style="padding:10px 0 8px"><span class="sec-title">${title}</span></div>${body}` : '';
+    const grouped = section('طلبات جديدة', newHtml) + section('قيد التنفيذ', progressHtml) + section('مكتملة', doneHtml);
+    list.innerHTML = grouped || '<div class="empty-state"><div class="ei">'+icon('inbox',40)+'</div><p>لا توجد طلبات</p></div>';
     document.getElementById('drv-t-ords').textContent = tOrd;
     document.getElementById('drv-t-earn').textContent = tEarn+' ج';
     document.getElementById('drv-w-ords').textContent = wOrd;
@@ -357,7 +382,7 @@ export async function acceptOrd() {
     showToast('تم قبول الطلب! توجه للمتجر','ok');
   } catch(e) {
     if (e?.message === 'busy') showToast('عندك طلب شغال بالفعل، خلّصه الأول','err');
-    else if (e?.message === 'taken') showToast('الطلب اتقبل من مندوب تاني','err');
+    else if (e?.message === 'taken') showToast('الطلب اتقبل من كابتن تاني','err');
     else showToast('حدث خطأ','err');
   }
 }
@@ -380,7 +405,9 @@ export async function updOrdStatus(id, status) {
 export function toggleOnline(el) {
   window.onlineStatus = !window.onlineStatus;
   document.getElementById('tog-dot').className='tog-dot '+(window.onlineStatus?'on':'off');
-  document.getElementById('tog-lbl').textContent = window.onlineStatus?'متاح':'غير متاح';
+  document.getElementById('tog-lbl').textContent = window.onlineStatus?'متصل الآن':'غير متصل';
+  const statusLine = document.getElementById('drv-status-line');
+  if (statusLine) statusLine.textContent = window.onlineStatus ? '🟢 متصل الآن' : '⚪ غير متصل';
   showToast(window.onlineStatus?'أنت متاح الآن':'أنت غير متاح',window.onlineStatus?'ok':'');
   if (!window.onlineStatus) {
     document.getElementById('new-ord-banner').style.display='none';
@@ -396,13 +423,33 @@ export function toggleOnline(el) {
   if (window.CU) updateDoc(doc(db,'users',window.CU.uid), { isOnline: window.onlineStatus }).catch(()=>{});
 }
 
+// P16 (§6 - Current Active Order): كارت مختصر في الرئيسية لو عند المندوب طلب توصيل جاري -
+// بيقرأ نفس الـ State المحسوب بالفعل في _updateHasActiveDeliveryOrder (صفر قراءة إضافية)،
+// وزرار "عرض الطلب" بينقّل لتبويب الطلبات الجديد (نفس نظام drvNav الموجود، صفر Routing جديد).
+function renderDriverHomeActiveOrderCard() {
+  const card = document.getElementById('drv-home-active-ord');
+  if (!card) return;
+  if (_hasActiveDeliveryOrder && _activeDeliveryOrderId) {
+    document.getElementById('drv-home-active-ord-id').textContent = '#' + _activeDeliveryOrderId.slice(-6).toUpperCase();
+    card.style.display = 'block';
+  } else {
+    card.style.display = 'none';
+  }
+}
+
 export function drvNav(tab,el) {
   document.querySelectorAll('#screen-driver .nav-item').forEach(n=>n.classList.remove('active'));
   el.classList.add('active');
   document.getElementById('drv-home-tab').style.display=tab==='home'?'block':'none';
+  document.getElementById('drv-orders-tab').style.display=tab==='orders'?'block':'none';
+  document.getElementById('drv-map-tab').style.display=tab==='map'?'block':'none';
   document.getElementById('drv-stats-tab').style.display=tab==='stats'?'block':'none';
   document.getElementById('drv-profile-tab').style.display=tab==='profile'?'block':'none';
-  document.getElementById('drv-extra').style.display=tab==='home'?'grid':'none';
+  // P16 (§8/§9 - Map كشاشة مستقلة): تبني/تُري الخريطة (Create-or-Resize، صفر Instance مكرر)
+  // فقط لما تبويب الخريطة نفسه هو المفتوح - بدل toggleDriverMap القديمة اللي كانت بتفتح الخريطة
+  // جوه تبويب الرئيسية (Map leakage). showDriverMapTab() منفصلة تمامًا عن toggleDriverMap()
+  // (باقية زي ما هي، مش متصلة من أي مكان تاني دلوقتي) - صفر لمسة لمنطقها المُختبر.
+  if (tab === 'map') showDriverMapTab();
 }
 
 export function buildChart() {

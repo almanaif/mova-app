@@ -60,7 +60,7 @@ import { _distMeters, maybeStopGpsIfIdle } from './driver.js';
 import { reverseGeocode } from './routing.js';
 import { getRoute } from './routing.js';
 import { createMapMarker, initRideStatusMap, updateRideStatusDriverLocation, clearRideStatusMap, invalidateRideStatusRoute,
-         setDriverMapRideMode, setDriverMapIdleMode, addAttributionControl, OPENFREEMAP_STYLE } from './maps.js';
+         setDriverMapRideMode, setDriverMapIdleMode, addAttributionControl, OPENFREEMAP_STYLE, openLocationPicker } from './maps.js';
 
 // أقصى عدد سائقين مرشحين لكل محاولة Dispatch - القيمة دي معمارية (جزء من التصميم المعتمد)
 // مش تسعير، فمكانها هنا صح مش في settings/pricing.
@@ -91,6 +91,7 @@ function rrReset() {
   const priceCard = document.getElementById('rr-price-card'); if (priceCard) priceCard.style.display = 'none';
   const confirmBtn = document.getElementById('rr-confirm-btn'); if (confirmBtn) confirmBtn.disabled = true;
   rrUpdateStepLabel();
+  rrUpdateSearchBtnLabel(); // P14: يرجّع زرار البحث لحالة "نقطة الانطلاق" ويظهره تاني بعد أي Reset
 }
 
 // شاشة الدخول لطلب مشوار - بتتفتح من زرار في الرئيسية
@@ -119,9 +120,57 @@ export function openRideRequest() {
 function rrUpdateStepLabel() {
   const lbl = document.getElementById('rr-step-label');
   if (!lbl) return;
-  if (!rrPickup) lbl.textContent = 'اضغط على الخريطة لتحديد نقطة الانطلاق';
-  else if (!rrDropoff) lbl.textContent = 'اضغط على الخريطة لتحديد نقطة الوصول';
+  // P14 (البند 9/10 - Pickup/Dropoff clarity): النص بقى بيوضّح "من أين؟/إلى أين؟" صراحة،
+  // ويذكر خياري التحديد التلاتة المتاحين فعليًا (ضغط على الخريطة، أو البحث/GPS عبر الزرار
+  // تحت - راجع rrOpenPointPicker) - صفر تغيير في آلية rrHandleMapClick نفسها.
+  if (!rrPickup) lbl.textContent = 'من أين؟ اضغط على الخريطة أو استخدم البحث لتحديد نقطة الانطلاق';
+  else if (!rrDropoff) lbl.textContent = 'إلى أين؟ اضغط على الخريطة أو استخدم البحث لتحديد نقطة الوصول';
   else lbl.textContent = 'تم تحديد النقطتين - اختر نوع المركبة';
+}
+
+// P14 (البند 11 - Ride Map Search): زرار يفتح نفس الـ Location Picker المشترك (بحث عناوين/POI
+// + "استخدام موقعي الحالي" + تأكيد واحد واضح - نفس المكوّن المستخدم فعليًا في "اطلب أي حاجة"
+// وموقع المتجر، راجع maps.js) بدل الاعتماد الكامل على الضغط اليدوي على الخريطة. الضغط المباشر
+// (rrHandleMapClick) فضل شغال زي ما هو تمامًا - الزرار ده إضافة مش استبدال، وبيستخدم نفس
+// pickupLocation/dropoffLocation state الموجود (rrPickup/rrDropoff) - صفر schema جديد.
+// Race Guard (البند 6): لو المستخدم ضغط "إعادة تحديد" أو رجع للخلف (rrClose/resetRideRequest -
+// كلاهما بيزوّد _rrGen) والـ Picker لسه مفتوح، رد onConfirm القديم لازم يتجاهل نفسه - وإلا كان
+// هيكتب فوق حالة بدأت من جديد فعليًا (Stale Callback بالظبط زي ما البند بيحذّر منه).
+export function rrOpenPointPicker() {
+  if (!rrMap || (rrPickup && rrDropoff)) return;
+  const isPickup = !rrPickup;
+  const myGen = _rrGen;
+  openLocationPicker({
+    title: isPickup ? 'نقطة الانطلاق' : 'نقطة الوصول',
+    initialLoc: isPickup && Number.isFinite(window.userLat) && Number.isFinite(window.userLng)
+      ? [window.userLat, window.userLng] : undefined,
+    onConfirm: (loc) => {
+      if (myGen !== _rrGen || !rrMap) return; // الشاشة اتقفلت/اتصفّرت وقت ما الـ Picker كان مفتوح
+      if (!Number.isFinite(loc?.lat) || !Number.isFinite(loc?.lng)) return; // إحداثية غير صالحة - صفر تأثير
+      const pt = { lat: loc.lat, lng: loc.lng };
+      if (isPickup) {
+        if (rrMarkerPickup) { rrMarkerPickup.remove(); rrMarkerPickup = null; }
+        rrPickup = pt;
+        rrMarkerPickup = createMapMarker(rrMap, pt, 'pickup');
+      } else {
+        if (rrMarkerDropoff) { rrMarkerDropoff.remove(); rrMarkerDropoff = null; }
+        rrDropoff = pt;
+        rrMarkerDropoff = createMapMarker(rrMap, pt, 'dropoff');
+      }
+      rrMap.flyTo({ center: [pt.lng, pt.lat], zoom: 15 });
+      rrUpdateStepLabel();
+      rrUpdateSearchBtnLabel();
+      if (rrPickup && rrDropoff) rrComputePrice();
+    },
+  });
+}
+function rrUpdateSearchBtnLabel() {
+  const btn = document.getElementById('rr-search-btn');
+  if (!btn) return;
+  if (rrPickup && rrDropoff) { btn.style.display = 'none'; return; }
+  btn.style.display = 'flex';
+  const txt = document.getElementById('rr-search-btn-txt');
+  if (txt) txt.textContent = !rrPickup ? 'البحث عن نقطة الانطلاق' : 'البحث عن نقطة الوصول';
 }
 
 function rrHandleMapClick(e) {
@@ -368,6 +417,11 @@ export function retryDispatch() {
 }
 
 // ===== Driver Accept (المهمة 5) — Transaction إلزامية =====
+// جديد (P14.3.1 - Atomicity Restored): activeRideId رجع يتحط جوه نفس الـ Transaction (زي ما
+// كان قبل P14.3) - firestore.rules دلوقتي بتستخدم getAfter() بدل get() للتحقق من
+// rides/{activeRideId}.driverId، وgetAfter() موثّقة رسميًا من Firebase تحديدًا لـ"validating
+// documents that are part of a batched write or transaction" (نفس المصدر والتفاصيل الموجودة
+// في تعليق acceptOrderAsDriver بـ orders.js - راجعه لعدم التكرار).
 export async function acceptRideOffer() {
   if (!window.CU || !window.currentRideOfferId) return;
   const rideId = window.currentRideOfferId;
@@ -641,8 +695,8 @@ let rsUnsub = null;
 const RS_LABELS = {
   [RIDE_STATUS.REQUESTED]: 'جاري البحث عن سائق...',
   [RIDE_STATUS.DRIVER_OFFERED]: 'تم إرسال العرض لأقرب السائقين، في انتظار الرد',
-  [RIDE_STATUS.DRIVER_ASSIGNED]: 'تم تعيين مندوب لك ✅',
-  [RIDE_STATUS.DRIVER_ARRIVED]: 'المندوب وصل لنقطة الانطلاق 📍',
+  [RIDE_STATUS.DRIVER_ASSIGNED]: 'تم تعيين كابتن لك ✅',
+  [RIDE_STATUS.DRIVER_ARRIVED]: 'الكابتن وصل لنقطة الانطلاق 📍',
   [RIDE_STATUS.IN_PROGRESS]: 'الرحلة جارية 🛣️',
   [RIDE_STATUS.COMPLETED]: 'تم الوصول ✅',
   [RIDE_STATUS.CANCELLED]: 'تم إلغاء المشوار',
