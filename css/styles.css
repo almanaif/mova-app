@@ -504,8 +504,17 @@ body{font-family:var(--font-family);background:var(--color-bg);color:var(--color
 
 /* أي حاوية خريطة في المشروع (Customer/Merchant/Driver/Admin) - تأمين إن الأبعاد ثابتة ومحسوبة
    بشكل صريح مهما كانت حالة الـ Tab/Section اللي هي جواه (مخفي ثم يظهر)، ومنع أي overflow غير
-   مرغوب فيه للـ Canvas الداخلي بتاع MapLibre. width:100% صريح لكل الشاشات بما فيها Desktop. */
-.map-wrap,.loc-picker-map-wrap,.drv-map-wrap,.adm-map-wrap,
+   مرغوب فيه للـ Canvas الداخلي بتاع MapLibre. width:100% صريح لكل الشاشات بما فيها Desktop.
+   جديد (P13 - Real Browser QA): ".map-wrap" و ".drv-map-wrap" اتشالوا من هنا - عندهم margin
+   أفقي في تعريفهم الأصلي (.map-wrap: margin:0 var(--space-4) ..؛ .drv-map-wrap: margin:12px
+   14px 0)، وwidth:100% هنا كان بيحسب 100% من عرض الأب (الشاشة) من غير ما يطرح الـ margin ده -
+   يعني العنصر يطلع أعرض من مساحته الفعلية المتاحة بمقدار الـ margin بالظبط على كل جنب، وده
+   بيسبب Horizontal Overflow حقيقي على كل الموبايل (اتأكد فعليًا في Browser QA: كانت
+   .map-wrap بتبدأ عند x=-16 بدل 0، وده بيوقع زرار "توسيط" (.map-recenter-btn) جزئيًا برّه
+   حدود الشاشة). ".map-wrap"/".drv-map-wrap" مش محتاجين width:100% أصلًا - عرضهم الطبيعي
+   (Block-level width:auto) بيحترم الـ margin بتاعهم صح من غير أي تعديل تاني. ".loc-picker-
+   map-wrap" و".adm-map-wrap" اتسابوا هنا لأنهم مفيهمش نفس تعارض الـ margin الأفقي. */
+.loc-picker-map-wrap,.adm-map-wrap,
 #tracking-map,#loc-picker-map,#ride-request-map,#ride-status-map,
 #driver-map,#admin-map,#loc-map-wrap,#loc-map{
   width:100%;
@@ -704,6 +713,11 @@ body{font-family:var(--font-family);background:var(--color-bg);color:var(--color
 /* Driver Map */
 .drv-map-wrap{margin:12px 14px 0;border-radius:var(--r);overflow:hidden;box-shadow:var(--sh)}
 #driver-map{height:200px;width:100%}
+/* P16 (§8/§9): الخريطة بقت شاشة مستقلة (تبويب كامل) بدل كارت صغير جوه الرئيسية - محتاجة مساحة
+   رأسية أكبر هناك تحديدًا. Selector مركّب (id+id) أعلى specificity من #driver-map لوحدها فوق،
+   فبيغلبها هنا بس من غير أي لمسة لقاعدتها الأصلية اللي بتشاركها سياقات تانية (tracking-map,
+   admin-map, ...). مفيش تغيير في .drv-map-wrap نفسها (نفس margin/radius/shadow في كل مكان). */
+#drv-map-tab #driver-map{height:calc(100vh - 260px);min-height:280px}
 
 /* Driver Analytics */
 .drv-analytics{padding:14px}
